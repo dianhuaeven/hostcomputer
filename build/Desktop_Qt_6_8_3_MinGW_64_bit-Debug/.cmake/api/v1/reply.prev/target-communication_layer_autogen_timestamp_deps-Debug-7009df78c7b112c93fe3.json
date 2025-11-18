@@ -1,0 +1,27 @@
+{
+	"backtrace" : 0,
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : 
+		[
+			"src/communication/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			}
+		]
+	},
+	"id" : "communication_layer_autogen_timestamp_deps::@6542c7a8c67ec929b08e",
+	"isGeneratorProvided" : true,
+	"name" : "communication_layer_autogen_timestamp_deps",
+	"paths" : 
+	{
+		"build" : "src/communication",
+		"source" : "src/communication"
+	},
+	"sources" : [],
+	"type" : "UTILITY"
+}

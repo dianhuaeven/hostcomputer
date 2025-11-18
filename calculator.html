@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>计算器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .calculator {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .btn {
+            transition: all 0.2s ease;
+        }
+        .btn:hover {
+            transform: scale(1.05);
+        }
+        .btn:active {
+            transform: scale(0.95);
+        }
+        .display {
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(5px);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+    <div class="calculator rounded-3xl p-6 shadow-2xl w-full max-w-md">
+        <h1 class="text-white text-2xl font-bold text-center mb-6">
+            <i class="fa fa-calculator mr-2"></i>计算器
+        </h1>
+
+        <div class="display rounded-xl p-4 mb-4 text-right">
+            <div class="text-gray-300 text-sm min-h-[20px]" id="history"></div>
+            <div class="text-white text-3xl font-mono min-h-[40px]" id="display">0</div>
+        </div>
+
+        <div class="grid grid-cols-4 gap-3">
+            <!-- 第一行 -->
+            <button class="btn col-span-2 bg-red-500 hover:bg-red-600 text-white rounded-xl p-4 text-lg font-semibold" onclick="clearAll()">
+                清除
+            </button>
+            <button class="btn bg-orange-500 hover:bg-orange-600 text-white rounded-xl p-4 text-lg font-semibold" onclick="deleteLast()">
+                <i class="fa fa-backspace"></i>
+            </button>
+            <button class="btn bg-purple-500 hover:bg-purple-600 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('/')">
+                ÷
+            </button>
+
+            <!-- 第二行 -->
+            <button class="btn bg-gray-600 hover:bg-gray-700 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('7')">
+                7
+            </button>
+            <button class="btn bg-gray-600 hover:bg-gray-700 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('8')">
+                8
+            </button>
+            <button class="btn bg-gray-600 hover:bg-gray-700 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('9')">
+                9
+            </button>
+            <button class="btn bg-purple-500 hover:bg-purple-600 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('*')">
+                ×
+            </button>
+
+            <!-- 第三行 -->
+            <button class="btn bg-gray-600 hover:bg-gray-700 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('4')">
+                4
+            </button>
+            <button class="btn bg-gray-600 hover:bg-gray-700 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('5')">
+                5
+            </button>
+            <button class="btn bg-gray-600 hover:bg-gray-700 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('6')">
+                6
+            </button>
+            <button class="btn bg-purple-500 hover:bg-purple-600 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('-')">
+                −
+            </button>
+
+            <!-- 第四行 -->
+            <button class="btn bg-gray-600 hover:bg-gray-700 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('1')">
+                1
+            </button>
+            <button class="btn bg-gray-600 hover:bg-gray-700 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('2')">
+                2
+            </button>
+            <button class="btn bg-gray-600 hover:bg-gray-700 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('3')">
+                3
+            </button>
+            <button class="btn bg-purple-500 hover:bg-purple-600 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('+')">
+                +
+            </button>
+
+            <!-- 第五行 -->
+            <button class="btn bg-gray-600 hover:bg-gray-700 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('0')">
+                0
+            </button>
+            <button class="btn bg-gray-600 hover:bg-gray-700 text-white rounded-xl p-4 text-lg font-semibold" onclick="appendToDisplay('.')">
+                .
+            </button>
+            <button class="btn col-span-2 bg-green-500 hover:bg-green-600 text-white rounded-xl p-4 text-lg font-semibold" onclick="calculate()">
+                =
+            </button>
+        </div>
+    </div>
+
+    <script>
+        let display = document.getElementById('display');
+        let history = document.getElementById('history');
+        let currentInput = '0';
+        let shouldResetDisplay = false;
+
+        function updateDisplay() {
+            display.textContent = currentInput;
+        }
+
+        function appendToDisplay(value) {
+            if (shouldResetDisplay) {
+                currentInput = '0';
+                shouldResetDisplay = false;
+            }
+
+            if (currentInput === '0' && value !== '.') {
+                currentInput = value;
+            } else if (value === '.' && currentInput.includes('.')) {
+                return; // 防止重复输入小数点
+            } else {
+                currentInput += value;
+            }
+            updateDisplay();
+        }
+
+        function clearAll() {
+            currentInput = '0';
+            history.textContent = '';
+            updateDisplay();
+        }
+
+        function deleteLast() {
+            if (currentInput.length > 1) {
+                currentInput = currentInput.slice(0, -1);
+            } else {
+                currentInput = '0';
+            }
+            updateDisplay();
+        }
+
+        function calculate() {
+            try {
+                // 替换显示符号为计算符号
+                let expression = currentInput.replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-');
+
+                // 使用Function构造函数进行安全的计算
+                let result = new Function('return ' + expression)();
+
+                // 显示历史记录
+                history.textContent = currentInput + ' =';
+
+                // 处理结果
+                if (isNaN(result) || !isFinite(result)) {
+                    currentInput = '错误';
+                } else {
+                    // 限制小数位数
+                    currentInput = Math.round(result * 100000000) / 100000000;
+                    // 移除末尾的.0
+                    if (currentInput.toString().endsWith('.0')) {
+                        currentInput = currentInput.toString().slice(0, -2);
+                    }
+                }
+
+                shouldResetDisplay = true;
+                updateDisplay();
+            } catch (error) {
+                history.textContent = currentInput;
+                currentInput = '错误';
+                shouldResetDisplay = true;
+                updateDisplay();
+            }
+        }
+
+        // 键盘支持
+        document.addEventListener('keydown', function(event) {
+            const key = event.key;
+
+            if (key >= '0' && key <= '9') {
+                appendToDisplay(key);
+            } else if (key === '.') {
+                appendToDisplay('.');
+            } else if (key === '+') {
+                appendToDisplay('+');
+            } else if (key === '-') {
+                appendToDisplay('-');
+            } else if (key === '*') {
+                appendToDisplay('*');
+            } else if (key === '/') {
+                event.preventDefault();
+                appendToDisplay('/');
+            } else if (key === 'Enter' || key === '=') {
+                calculate();
+            } else if (key === 'Escape') {
+                clearAll();
+            } else if (key === 'Backspace') {
+                deleteLast();
+            }
+        });
+    </script>
+</body>
+</html>

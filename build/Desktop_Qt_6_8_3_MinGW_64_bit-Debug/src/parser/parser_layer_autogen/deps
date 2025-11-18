@@ -1,0 +1,6 @@
+parser_layer_autogen/timestamp: \
+	C:/Users/Lenovo/Documents/hostcomputer/src/parser/CMakeLists.txt \
+	C:/Users/Lenovo/Documents/hostcomputer/src/parser/motor_state.h \
+	C:/Users/Lenovo/Documents/hostcomputer/src/parser/parser.cpp \
+	C:/Users/Lenovo/Documents/hostcomputer/src/parser/parser.h \
+	D:/Qt/Tools/CMake_64/bin/cmake.exe

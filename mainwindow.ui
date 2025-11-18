@@ -1,0 +1,615 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1920</width>
+    <height>1080</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>电机控制系统上位机</string>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>1600</width>
+    <height>900</height>
+   </size>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayout_main">
+    <property name="spacing">
+     <number>5</number>
+    </property>
+    <property name="leftMargin">
+     <number>5</number>
+    </property>
+    <property name="topMargin">
+     <number>5</number>
+    </property>
+    <property name="rightMargin">
+     <number>5</number>
+    </property>
+    <property name="bottomMargin">
+     <number>5</number>
+    </property>
+
+    <!-- 顶部状态栏 -->
+    <item>
+     <widget class="QFrame" name="frame_status">
+      <property name="frameShape">
+       <enum>QFrame::StyledPanel</enum>
+      </property>
+      <property name="maximumSize">
+       <size>
+        <height>80</height>
+        <width>16777215</width>
+       </size>
+      </property>
+      <layout class="QHBoxLayout" name="horizontalLayout_status">
+       <property name="spacing">
+        <number>15</number>
+       </property>
+       <item>
+        <widget class="QLabel" name="label_connection_status">
+         <property name="text">
+          <string>连接状态:</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_connection_value">
+         <property name="text">
+          <string>断开</string>
+         </property>
+         <property name="styleSheet">
+          <string>color: red; font-weight: bold;</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="Line" name="line_separator1">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_heartbeat">
+         <property name="text">
+          <string>下位机心跳:</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_heartbeat_value">
+         <property name="text">
+          <string>丢失</string>
+         </property>
+         <property name="styleSheet">
+          <string>color: red; font-weight: bold;</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="Line" name="line_separator2">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_fps">
+         <property name="text">
+          <string>当前帧率:</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_fps_value">
+         <property name="text">
+          <string>0 FPS</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="Line" name="line_separator3">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_cpu">
+         <property name="text">
+          <string>CPU/GPU:</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_cpu_value">
+         <property name="text">
+          <string>0% / 0%</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="Line" name="line_separator4">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_mode">
+         <property name="text">
+          <string>电机模式:</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_mode_value">
+         <property name="text">
+          <string>待机</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="horizontalSpacer_status">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>40</width>
+           <height>20</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+    </item>
+
+    <!-- 主要内容区域 -->
+    <item>
+     <layout class="QHBoxLayout" name="horizontalLayout_main">
+      <property name="spacing">
+       <number>5</number>
+      </property>
+
+      <!-- 左侧相机画面区域 -->
+      <item>
+       <widget class="QGroupBox" name="group_cameras">
+        <property name="title">
+         <string>相机画面</string>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>1200</width>
+          <height>600</height>
+         </size>
+        </property>
+        <layout class="QGridLayout" name="gridLayout_cameras">
+         <property name="spacing">
+          <number>3</number>
+         </property>
+         <item row="0" column="0">
+          <widget class="QLabel" name="camera_1">
+           <property name="minimumSize">
+            <size>
+             <width>390</width>
+             <height>290</height>
+            </size>
+           </property>
+           <property name="styleSheet">
+            <string>border: 2px solid #cccccc; background-color: #f0f0f0;</string>
+           </property>
+           <property name="text">
+            <string>相机 1</string>
+           </property>
+           <property name="alignment">
+            <set>Qt::AlignCenter</set>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QLabel" name="camera_2">
+           <property name="minimumSize">
+            <size>
+             <width>390</width>
+             <height>290</height>
+            </size>
+           </property>
+           <property name="styleSheet">
+            <string>border: 2px solid #cccccc; background-color: #f0f0f0;</string>
+           </property>
+           <property name="text">
+            <string>相机 2</string>
+           </property>
+           <property name="alignment">
+            <set>Qt::AlignCenter</set>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="2">
+          <widget class="QLabel" name="camera_3">
+           <property name="minimumSize">
+            <size>
+             <width>390</width>
+             <height>290</height>
+            </size>
+           </property>
+           <property name="styleSheet">
+            <string>border: 2px solid #cccccc; background-color: #f0f0f0;</string>
+           </property>
+           <property name="text">
+            <string>相机 3</string>
+           </property>
+           <property name="alignment">
+            <set>Qt::AlignCenter</set>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="camera_4">
+           <property name="minimumSize">
+            <size>
+             <width>390</width>
+             <height>290</height>
+            </size>
+           </property>
+           <property name="styleSheet">
+            <string>border: 2px solid #cccccc; background-color: #f0f0f0;</string>
+           </property>
+           <property name="text">
+            <string>相机 4</string>
+           </property>
+           <property name="alignment">
+            <set>Qt::AlignCenter</set>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QLabel" name="camera_5">
+           <property name="minimumSize">
+            <size>
+             <width>390</width>
+             <height>290</height>
+            </size>
+           </property>
+           <property name="styleSheet">
+            <string>border: 2px solid #cccccc; background-color: #f0f0f0;</string>
+           </property>
+           <property name="text">
+            <string>相机 5</string>
+           </property>
+           <property name="alignment">
+            <set>Qt::AlignCenter</set>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="2">
+          <widget class="QLabel" name="camera_6">
+           <property name="minimumSize">
+            <size>
+             <width>390</width>
+             <height>290</height>
+            </size>
+           </property>
+           <property name="styleSheet">
+            <string>border: 2px solid #cccccc; background-color: #f0f0f0;</string>
+           </property>
+           <property name="text">
+            <string>相机 6</string>
+           </property>
+           <property name="alignment">
+            <set>Qt::AlignCenter</set>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+
+      <!-- 右侧信息显示区域 -->
+      <item>
+       <layout class="QVBoxLayout" name="verticalLayout_right">
+        <property name="spacing">
+         <number>5</number>
+        </property>
+
+        <!-- 小车姿态模型窗口 -->
+        <item>
+         <widget class="QGroupBox" name="group_car_model">
+          <property name="title">
+           <string>小车姿态模型</string>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>400</width>
+            <height>300</height>
+           </size>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayout_car_model">
+           <item>
+            <widget class="QLabel" name="car_model_display">
+             <property name="minimumSize">
+              <size>
+               <width>380</width>
+               <height>260</height>
+              </size>
+             </property>
+             <property name="styleSheet">
+              <string>border: 2px solid #cccccc; background-color: #f8f8f8;</string>
+             </property>
+             <property name="text">
+              <string>3D姿态模型显示区域</string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_car_info">
+             <item>
+              <widget class="QLabel" name="label_roll">
+               <property name="text">
+                <string>Roll: 0°</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="label_pitch">
+               <property name="text">
+                <string>Pitch: 0°</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="label_yaw">
+               <property name="text">
+                <string>Yaw: 0°</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+
+        <!-- 指令显示窗口 -->
+        <item>
+         <widget class="QGroupBox" name="group_commands">
+          <property name="title">
+           <string>下位机指令</string>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>400</width>
+            <height>200</height>
+           </size>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayout_commands">
+           <item>
+            <widget class="QTextEdit" name="text_commands">
+             <property name="minimumSize">
+              <size>
+               <width>380</width>
+               <height>160</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>160</height>
+              </size>
+             </property>
+             <property name="readOnly">
+              <bool>true</bool>
+             </property>
+             <property name="styleSheet">
+              <string>font-family: 'Consolas', 'Courier New', monospace; font-size: 12px;</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_commands_control">
+             <item>
+              <widget class="QPushButton" name="btn_clear_commands">
+               <property name="text">
+                <string>清空</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QCheckBox" name="checkbox_auto_scroll">
+               <property name="text">
+                <string>自动滚动</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer_commands">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+
+        <!-- 错误提示区域 -->
+        <item>
+         <widget class="QGroupBox" name="group_errors">
+          <property name="title">
+           <string>系统消息</string>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>400</width>
+            <height>150</height>
+           </size>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayout_errors">
+           <item>
+            <widget class="QTextEdit" name="text_errors">
+             <property name="minimumSize">
+              <size>
+               <width>380</width>
+               <height>110</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>110</height>
+              </size>
+             </property>
+             <property name="readOnly">
+              <bool>true</bool>
+             </property>
+             <property name="styleSheet">
+              <string>font-family: 'Consolas', 'Courier New', monospace; font-size: 11px; background-color: #fff8f8;</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_errors_control">
+             <item>
+              <widget class="QPushButton" name="btn_clear_errors">
+               <property name="text">
+                <string>清空</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="label_error_count">
+               <property name="text">
+                <string>错误: 0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer_errors">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1920</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menu_file">
+    <property name="title">
+     <string>文件</string>
+    </property>
+    <addaction name="action_connect"/>
+    <addaction name="action_disconnect"/>
+    <addaction name="separator"/>
+    <addaction name="action_exit"/>
+   </widget>
+   <widget class="QMenu" name="menu_view">
+    <property name="title">
+     <string>视图</string>
+    </property>
+    <addaction name="action_fullscreen"/>
+    <addaction name="action_reset_layout"/>
+   </widget>
+   <widget class="QMenu" name="menu_help">
+    <property name="title">
+     <string>帮助</string>
+    </property>
+    <addaction name="action_about"/>
+   </widget>
+   <addaction name="menu_file"/>
+   <addaction name="menu_view"/>
+   <addaction name="menu_help"/>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+  <action name="action_connect">
+   <property name="text">
+    <string>连接设备</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+C</string>
+   </property>
+  </action>
+  <action name="action_disconnect">
+   <property name="text">
+    <string>断开连接</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+D</string>
+   </property>
+  </action>
+  <action name="action_exit">
+   <property name="text">
+    <string>退出</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Q</string>
+   </property>
+  </action>
+  <action name="action_fullscreen">
+   <property name="text">
+    <string>全屏</string>
+   </property>
+   <property name="shortcut">
+    <string>F11</string>
+   </property>
+  </action>
+  <action name="action_reset_layout">
+   <property name="text">
+    <string>重置布局</string>
+   </property>
+  </action>
+  <action name="action_about">
+   <property name="text">
+    <string>关于</string>
+   </property>
+  </action>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
