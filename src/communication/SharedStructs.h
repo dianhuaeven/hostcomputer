@@ -7,6 +7,45 @@
 namespace Communication {
 
 /**
+ * @brief MJPEG帧类型
+ */
+enum class MjpegFrameType : uint8_t {
+    Invalid = 0x00,
+    Header = 0x01,
+    Data = 0x02,
+    End = 0x03,
+    Heartbeat = 0x04
+};
+
+/**
+ * @brief MJPEG视频帧头结构
+ */
+#pragma pack(push, 1)
+struct MjpegFrameHeader {
+    uint8_t  magic;           // 魔数标识 0xAA
+    uint8_t  frameType;       // 帧类型 MjpegFrameType
+    uint16_t frameId;         // 帧序号
+    uint16_t packetIndex;     // 当前分片序号 (从0开始)
+    uint16_t totalPackets;    // 总分片数
+    uint32_t payloadSize;     // 完整JPEG数据大小
+    uint32_t timestamp;       // 时间戳(毫秒)
+    uint8_t  cameraId;        // 摄像头ID (0-5)
+    uint8_t  reserved[3];     // 保��字段
+};
+#pragma pack(pop)
+
+/**
+ * @brief UDP视频流数据包信息
+ */
+struct UdpVideoPacket {
+    int sequence;         // 序列号
+    int totalPackets;     // 总包数（用于分片传输）
+    int packetIndex;      // 当前包索引
+    int payloadSize;      // 载荷大小
+    bool isComplete;      // 是否为完整帧
+};
+
+/**
  * @brief 单个关节状态信息 (与ESP32端JointTelemetry对应)
  */
 struct JointState {

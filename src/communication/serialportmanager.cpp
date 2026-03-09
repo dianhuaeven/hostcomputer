@@ -46,9 +46,6 @@ QStringList SerialPortManager::getAvailablePorts() const
 
     for (const QSerialPortInfo &info : serialPortInfos) {
         portNames << info.portName();
-        qDebug() << "Found serial port:" << info.portName()
-                 << "Description:" << info.description()
-                 << "Manufacturer:" << info.manufacturer();
     }
 
     return portNames;
@@ -75,16 +72,40 @@ bool SerialPortManager::openPort(const QString &portName, int baudRate)
 
     // 尝试打开端口
     if (m_serialPort->open(QIODevice::ReadWrite)) {
-        qDebug() << "Serial port" << portName << "opened successfully";
         emit portOpened(portName);
         emit connectionStatusChanged(true);
         return true;
     } else {
-        QString error = QString("Failed to open port %1: %2")
-                        .arg(portName)
-                        .arg(m_serialPort->errorString());
-        qDebug() << error;
-        emitError(error);
+        // 详细的错误报告
+        QSerialPort::SerialPortError error = m_serialPort->error();
+        QString errorString = m_serialPort->errorString();
+
+        QString detailedError = QString("❌ 串口打开失败 %1\n")
+                              .arg(portName);
+        detailedError += QString("错误代码: %1\n").arg(static_cast<int>(error));
+        detailedError += QString("错误描述: %1\n").arg(errorString);
+
+        // 根据错误类型提供建议
+        switch (error) {
+        case QSerialPort::PermissionError:
+            detailedError += "建议: 检查串口权限，尝试以管理员身份运行程序";
+            break;
+        case QSerialPort::DeviceNotFoundError:
+            detailedError += "建议: 检查设备是否正确连接，驱动是否安装";
+            break;
+        case QSerialPort::OpenError:
+            detailedError += "建议: 检查串口是否被其他程序占用";
+            break;
+        case QSerialPort::ResourceError:
+            detailedError += "建议: 检查USB线缆连接，尝试重新插拔设备";
+            break;
+        default:
+            detailedError += "建议: 检查设备驱动和USB连接";
+            break;
+        }
+
+        qDebug() << detailedError;
+        emitError(detailedError);
         return false;
     }
 }
@@ -94,7 +115,6 @@ void SerialPortManager::closePort()
     if (m_serialPort->isOpen()) {
         m_serialPort->close();
         m_portName.clear();
-        qDebug() << "Serial port closed";
         emit portClosed();
         emit connectionStatusChanged(false);
     }
@@ -189,6 +209,19 @@ bool SerialPortManager::sendText(const QString &text)
     return sendData(text.toUtf8());
 }
 
+bool SerialPortManager::sendCommand(const Communication::Command &command)
+{
+    // 使用ProtocolParser编码命令
+    QByteArray encodedFrame = m_protocolParser.encodeToQByteArray(command);
+    if (encodedFrame.isEmpty()) {
+        emitError("Failed to encode command to protocol frame");
+        return false;
+    }
+
+    // 发送编码后的帧
+    return sendData(encodedFrame);
+}
+
 QString SerialPortManager::getPortName() const
 {
     return m_portName;
@@ -228,7 +261,9 @@ void SerialPortManager::handleReadyRead()
 {
     // 读取所有可用数据
     QByteArray data = m_serialPort->readAll();
+
     m_receivedData.append(data);
+    m_frameBuffer.append(data);
 
     // 发送原始数据信号
     emit dataReceived(data);
@@ -240,6 +275,9 @@ void SerialPortManager::handleReadyRead()
         m_receivedData.remove(0, index + 1);
         emit textReceived(line.trimmed());
     }
+
+    // 处理协议帧缓冲
+    processFrameBuffer();
 
     // 启动超时定时器（如果需要）
     m_timeoutTimer->start();
@@ -286,7 +324,6 @@ void SerialPortManager::handleError(QSerialPort::SerialPortError error)
         break;
     }
 
-    qDebug() << "Serial port error:" << errorMessage;
     emitError(errorMessage);
 
     // 如果是严重错误，关闭端口
@@ -298,13 +335,55 @@ void SerialPortManager::handleError(QSerialPort::SerialPortError error)
 
 void SerialPortManager::handleBytesWritten(qint64 bytes)
 {
-    // 可选：记录写入的字节数或发送写入完成信号
-    qDebug() << "Bytes written:" << bytes;
+    Q_UNUSED(bytes)
+}
+
+void SerialPortManager::processFrameBuffer()
+{
+    // 当缓冲区数据不足一个完整帧时，直接返回
+    while (m_frameBuffer.size() >= PROTOCOL_FRAME_SIZE) {
+        // 查找帧头 (0xAA)
+        int headerIndex = m_frameBuffer.indexOf(FRAME_HEADER);
+
+        if (headerIndex == -1) {
+            qDebug() << "[SerialPortManager] 未找到帧头，缓冲区内容:" << m_frameBuffer.toHex(' ');
+            // 没有找到帧头，清空缓冲区（保留最后PROTOCOL_FRAME_SIZE-1字节）
+            if (m_frameBuffer.size() > PROTOCOL_FRAME_SIZE - 1) {
+                m_frameBuffer = m_frameBuffer.right(PROTOCOL_FRAME_SIZE - 1);
+            }
+            return;
+        }
+
+        // 如果帧头不在缓冲区开头，丢弃帧头之前的数据
+        if (headerIndex > 0) {
+            m_frameBuffer.remove(0, headerIndex);
+        }
+
+        // 检查是否有足够的字节构成完整帧
+        if (m_frameBuffer.size() < PROTOCOL_FRAME_SIZE) {
+            return; // 等待更多数据
+        }
+
+        // 提取一个完整的帧
+        QByteArray frame = m_frameBuffer.left(PROTOCOL_FRAME_SIZE);
+
+        // 发送完整帧信号
+        emit completeFrameReceived(frame);
+
+        // 使用ProtocolParser解析帧数据
+        Communication::ESP32State state;
+        if (m_protocolParser.parseFromQByteArray(frame, &state)) {
+            // 发送解析后的ESP32状态信号
+            emit esp32StateReceived(state);
+        }
+
+        // 从缓冲区移除已处理的帧
+        m_frameBuffer.remove(0, PROTOCOL_FRAME_SIZE);
+    }
 }
 
 void SerialPortManager::emitError(const QString &message)
 {
-    qDebug() << "SerialPortManager Error:" << message;
     emit errorOccurred(message);
 }
 

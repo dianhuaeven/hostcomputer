@@ -14,10 +14,12 @@
 set(CONTROLLER_SOURCES
     controller.cpp
     controller.h
-    CameraManager_simple.cpp
-    CameraManager_simple.h
-    VideoWidget.cpp
-    VideoWidget.h
+    DisplayLayoutManager.cpp
+    DisplayLayoutManager.h
+    KeyboardController.cpp
+    KeyboardController.h
+    RealCameraManager.cpp
+    RealCameraManager.h
 )
 
 # 创建静态库

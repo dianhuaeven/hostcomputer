@@ -1,8 +1,12 @@
 #include "mainwindow.h"
 #include "./ui_mainwindow.h"
+#include "src/communication/SharedStructs.h"  // 先包含Communication命名空间
 #include "src/communication/serialportmanager.h"
+#include "src/communication/ROS1TcpClient.h"
+
 #include "src/parser/ProtocolParser.h"
-#include "src/communication/SharedStructs.h"
+#include <QtGlobal>
+#include <QSpinBox>
 
 #include <QCloseEvent>
 #include <QMessageBox>
@@ -16,15 +20,21 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QComboBox>
+#include <QLineEdit>
 #include <QDialogButtonBox>
+#include <QApplication>
 #include <QShortcut>
 #include <QKeySequence>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
     , m_serialManager(nullptr)
-    , m_protocolParser(nullptr)
+    , m_tcpClient(nullptr)
+    , m_keyboardController(nullptr)
+    , m_displayLayout(nullptr)
 {
     ui->setupUi(this);
 
@@ -33,9 +43,51 @@ MainWindow::MainWindow(QWidget *parent)
     resize(1920, 1080);
     setMinimumSize(1600, 900);
 
+    // 设置布局到 CarWidget 上
+    // 将 模型 类的 UI 添加到布局中
+
     // 初始化组件
     setupSerialPort();
     setupParser();
+    setupTcpClient();
+    setupDisplayLayout();
+
+    // 初始化键盘控制器
+    m_keyboardController = new KeyboardController(this);
+    connect(m_keyboardController, &KeyboardController::velocityChanged,
+            this, [this](float lx, float ly, float az) {
+        // 只在方向变化时打一次日志
+        static float lastLx = 0.0f, lastAz = 0.0f;
+        bool changed = (lx != lastLx || az != lastAz);
+        if (changed) {
+            lastLx = lx;
+            lastAz = az;
+            bool isStopped = (lx == 0.0f && az == 0.0f);
+            if (!isStopped) {
+                QString dir;
+                if (lx > 0) dir += "前进 ";
+                if (lx < 0) dir += "后退 ";
+                if (az > 0) dir += "左转 ";
+                if (az < 0) dir += "右转 ";
+                addCommand(QString("[键盘] %1 (lx=%.2f az=%.2f)").arg(dir.trimmed()).arg(lx).arg(az));
+            } else {
+                addCommand("[键盘] 停止");
+            }
+        }
+
+        if (m_tcpClient && m_tcpClient->isConnected()) {
+            m_tcpClient->sendVelocityCommand(lx, ly, az);
+        }
+    });
+    connect(m_keyboardController, &KeyboardController::emergencyStopRequested,
+            this, [this]() {
+        if (m_tcpClient && m_tcpClient->isConnected()) {
+            m_tcpClient->sendEmergencyStop();
+            addCommand("[键盘] 急停!");
+        }
+    });
+    // 默认启用键盘控制
+    m_keyboardController->setEnabled(true);
 
     // 初始化定时器
     m_statusTimer = new QTimer(this);
@@ -46,21 +98,27 @@ MainWindow::MainWindow(QWidget *parent)
     setupConnections();
     setupStatusBar();
 
-    // 设置F5快捷键刷新串口列表
-    QShortcut* refreshShortcut = new QShortcut(QKeySequence(Qt::Key_F5), this);
-    connect(refreshShortcut, &QShortcut::activated, this, &MainWindow::refreshSerialPorts);
-
+    
     // 初始化UI状态
     updateConnectionDisplay();
     updateHeartbeatDisplay();
 
-    qDebug() << "主窗口初始化完成";
+    // 添加系统启动提示
+    addCommand("[系统] 主窗口初始化完成");
+    addCommand("[系统] 请连接串口设备开始接收数据");
+
+    // USB-CDC握手提示
+    addCommand("[USB-CDC] 提示：等待ESP32设备连接和握手...");
+    addCommand("[USB-CDC] 如果ESP32发送握手信号，程序会自动响应");
 }
 
 MainWindow::~MainWindow()
 {
     if (m_statusTimer) {
         m_statusTimer->stop();
+    }
+    if (m_tcpClient) {
+        m_tcpClient->disconnectFromROS();
     }
     delete ui;
 }
@@ -70,23 +128,61 @@ void MainWindow::setupSerialPort()
     // 创建串口管理器
     m_serialManager = new Communication::SerialPortManager(this);
 
-    // 连接串口数据接收信号
+    // 连接串口数据接收信号（用于调试和日志）
     connect(m_serialManager, &Communication::SerialPortManager::dataReceived,
             this, &MainWindow::onSerialDataReceived);
+
+    // 连接解析后的ESP32状态数据信号
+    connect(m_serialManager, &Communication::SerialPortManager::esp32StateReceived,
+            this, &MainWindow::onEsp32StateReceived);
 
     // 连接连接状态变化信号
     connect(m_serialManager, &Communication::SerialPortManager::connectionStatusChanged,
             this, &MainWindow::updateConnectionStatus);
+}
 
-    qDebug() << "串口管理器初���化完成";
+void MainWindow::setupDisplayLayout()
+{
+    // 创建布局管理器（2行3列）
+    m_displayLayout = new DisplayLayoutManager(2, 3, this);
+
+    // 把 DisplayLayoutManager 塞进 group_cameras 的布局中
+    ui->group_cameras->layout()->addWidget(m_displayLayout);
 }
 
 void MainWindow::setupParser()
 {
-    // 创建协议解析器
-    m_protocolParser = new Parser::ProtocolParser();
+    // 协议解析已经移到SerialPortManager中处理
+}
 
-    qDebug() << "协议解析器初始化完成";
+void MainWindow::setupTcpClient()
+{
+    m_tcpClient = new Communication::ROS1TcpClient(this);
+
+    // 连接TCP状态信号
+    connect(m_tcpClient, &Communication::ROS1TcpClient::connectedToROS, this, [this]() {
+        addCommand("[TCP] 已连接到ROS节点");
+        statusBar()->showMessage(QString("TCP已连接: %1:%2")
+            .arg(m_tcpClient->getROSHost()).arg(m_tcpClient->getROSPort()));
+    });
+
+    connect(m_tcpClient, &Communication::ROS1TcpClient::disconnectedFromROS, this, [this]() {
+        addCommand("[TCP] 与ROS节点断开连接");
+        statusBar()->showMessage("TCP连接断开");
+    });
+
+    connect(m_tcpClient, &Communication::ROS1TcpClient::connectionError, this, [this](const QString &error) {
+        addError(QString("[TCP] %1").arg(error));
+    });
+
+    // 连接数据接收信号
+    connect(m_tcpClient, &Communication::ROS1TcpClient::motorStateReceived,
+            this, &MainWindow::onEsp32StateReceived);
+
+    connect(m_tcpClient, &Communication::ROS1TcpClient::systemStatusReceived, this, [this](const QJsonObject &status) {
+        addCommand(QString("[TCP] 收到系统状态: %1").arg(
+            QString(QJsonDocument(status).toJson(QJsonDocument::Compact))));
+    });
 }
 
 void MainWindow::setupConnections()
@@ -161,27 +257,57 @@ void MainWindow::updateCarAttitude(double roll, double pitch, double yaw)
     m_pitch = pitch;
     m_yaw = yaw;
 
-    ui->label_roll->setText(QString("Roll: %1°").arg(roll, 0, 'f', 1));
-    ui->label_pitch->setText(QString("Pitch: %1°").arg(pitch, 0, 'f', 1));
-    ui->label_yaw->setText(QString("Yaw: %1°").arg(yaw, 0, 'f', 1));
 
-    // TODO: 这里可以更新3D姿态模型显示
 }
 
-void MainWindow::updateJointsData(const MotorState& motorState)
+void MainWindow::updateJointsData(const Communication::ESP32State& esp32State)
 {
     // 清空text_errors控件
     ui->text_errors->clear();
-
-    // 获取关节数据的格式化字符串并显示
-    QString jointsData = motorState.getJointsDataString();
 
     // 添加时间戳
     QString timestamp = getCurrentTimestamp();
     QString header = QString("[%1] 6关节数据接收\n").arg(timestamp);
 
+    // 构建关节数据字符串
+    QString jointsData = "=== 6关节数据 ===\n";
+    for (int i = 0; i < 6; ++i) {
+        jointsData += QString("关节 %1:\n").arg(i + 1);
+        jointsData += QString("  位置: %1\n").arg(esp32State.joints[i].position / 1000.0f, 0, 'f', 3);
+        jointsData += QString("  电流: %1 A\n").arg(esp32State.joints[i].current / 1000.0f, 0, 'f', 3);
+        jointsData += QString("  执行器位置: %1\n").arg(esp32State.executor_position / 1000.0f, 0, 'f', 3);
+        jointsData += QString("  执行器扭矩: %1\n").arg(esp32State.executor_torque / 1000.0f, 0, 'f', 3);
+        jointsData += QString("  执行器标志: %1\n").arg(esp32State.executor_flags);
+        jointsData += QString("  保留字段: %1\n").arg(esp32State.reserved);
+        if (i < 5) jointsData += "\n";
+    }
+
+    // 添加执行器数据摘要
+    jointsData += "\n=== 执行器数据摘要 ===\n";
+    jointsData += QString("执行器位置: %1\n").arg(esp32State.executor_position / 1000.0f, 0, 'f', 3);
+    jointsData += QString("执行器扭矩: %1\n").arg(esp32State.executor_torque / 1000.0f, 0, 'f', 3);
+    jointsData += QString("执行器标志: 0x%1\n").arg(esp32State.executor_flags, 2, 16, QChar('0'));
+    jointsData += QString("保留字段: %1\n").arg(esp32State.reserved);
+
     // 设置文本内容
     ui->text_errors->setText(header + jointsData);
+
+    // 在命令区域添加格式化的关节数据
+    addCommand("[关节数据] 数据已更新到显示区域");
+
+    // 格式化显示6个关节的位置数据（用于命令区域）
+    QString positionData = QString("[关节数据] 位置: ");
+    for (int i = 0; i < 6; ++i) {
+        positionData += QString("J%1:%2 ").arg(i+1).arg(esp32State.joints[i].position / 1000.0f, 0, 'f', 3);
+    }
+    addCommand(positionData);
+
+    // 格式化显示6个关节的电流数据（用于命令区域）
+    QString currentData = QString("[电流数据] 电流: ");
+    for (int i = 0; i < 6; ++i) {
+        currentData += QString("J%1:%2A ").arg(i+1).arg(esp32State.joints[i].current / 1000.0f, 0, 'f', 3);
+    }
+    addCommand(currentData);
 
     // 可选：滚动到底部
     QTextCursor cursor = ui->text_errors->textCursor();
@@ -198,7 +324,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     QMessageBox::StandardButton reply = QMessageBox::question(
         this,
         "确认退出",
-        "确定要退出电机控制系统吗？",
+        "确定要退出控制系统吗",
         QMessageBox::Yes | QMessageBox::No,
         QMessageBox::No
     );
@@ -214,6 +340,22 @@ void MainWindow::closeEvent(QCloseEvent *event)
     }
 }
 
+void MainWindow::keyPressEvent(QKeyEvent *event)
+{
+    if (m_keyboardController && m_keyboardController->isEnabled()) {
+        m_keyboardController->handleKeyPress(event);
+    }
+    QMainWindow::keyPressEvent(event);
+}
+
+void MainWindow::keyReleaseEvent(QKeyEvent *event)
+{
+    if (m_keyboardController && m_keyboardController->isEnabled()) {
+        m_keyboardController->handleKeyRelease(event);
+    }
+    QMainWindow::keyReleaseEvent(event);
+}
+
 // 菜单槽函数
 void MainWindow::on_action_connect_triggered()
 {
@@ -221,16 +363,23 @@ void MainWindow::on_action_connect_triggered()
     showSerialPortSelection();
 }
 
+void MainWindow::on_action_tcp_connect_triggered()
+{
+    showTcpConnectionDialog();
+}
+
 void MainWindow::on_action_disconnect_triggered()
 {
-    if (!m_serialManager) {
-        addError("[错误] 串口管理器未初始化");
-        return;
+    if (m_serialManager && m_serialManager->isOpen()) {
+        m_serialManager->closePort();
+        updateConnectionStatus(false);
+        addCommand("[操作] 串口连接已断开");
     }
 
-    m_serialManager->closePort();
-    updateConnectionStatus(false);
-    addCommand("[操作] 用户点击断开连接");
+    if (m_tcpClient && m_tcpClient->isConnected()) {
+        m_tcpClient->disconnectFromROS();
+        addCommand("[操作] TCP连接已断开");
+    }
 }
 
 void MainWindow::on_action_exit_triggered()
@@ -249,8 +398,95 @@ void MainWindow::on_action_fullscreen_triggered()
 
 void MainWindow::on_action_reset_layout_triggered()
 {
-    // TODO: 重置窗口布局
-    QMessageBox::information(this, "提示", "布局重置功能开发中...");
+    // 确认重置
+    auto reply = QMessageBox::question(this, "确认重置",
+        "确定要重置界面吗？\n\n这将清除所有视频显示并重新初始化组件，可能解决卡顿问题。",
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+
+    if (reply == QMessageBox::Yes) {
+        reinitialize();
+    }
+}
+
+void MainWindow::cleanupResources()
+{
+
+    // 1. 停止并断开串口
+    if (m_serialManager) {
+        if (m_serialManager->isOpen()) {
+            m_serialManager->closePort();
+        }
+        m_serialManager->disconnect();
+    }
+
+    // 1.5 断开TCP
+    if (m_tcpClient) {
+        m_tcpClient->disconnectFromROS();
+        m_tcpClient->disconnect();
+    }
+
+    // 2. 清空命令和错误显示
+    if (ui->text_commands) {
+        ui->text_commands->clear();
+    }
+    if (ui->text_errors) {
+        ui->text_errors->clear();
+    }
+
+    // 3. 处理待处理的事件，确保UI刷新
+    QApplication::processEvents();
+
+}
+
+void MainWindow::reinitialize()
+{
+
+    // 1. 清理现有资源
+    cleanupResources();
+
+    // 2. 删除旧组件
+    if (m_serialManager) {
+        delete m_serialManager;
+        m_serialManager = nullptr;
+    }
+
+    if (m_tcpClient) {
+        delete m_tcpClient;
+        m_tcpClient = nullptr;
+    }
+
+    // 3. 删除旧的布局管理器
+    if (m_displayLayout) {
+        delete m_displayLayout;
+        m_displayLayout = nullptr;
+    }
+
+    // 4. 重置状态变量
+    m_isConnected = false;
+    m_heartbeatOnline = false;
+    m_currentFPS = 0;
+    m_cpuUsage = 0;
+    m_gpuUsage = 0;
+    m_motorMode = "待机";
+    m_errorCount = 0;
+
+    // 5. 处理待处理的事件
+    QApplication::processEvents();
+
+    // 6. 重新初始化组件
+    setupSerialPort();
+    setupParser();
+    setupTcpClient();
+    setupDisplayLayout();
+
+    // 7. 重新更新UI状态
+    updateConnectionDisplay();
+    updateHeartbeatDisplay();
+
+    // 8. 添加提示信息
+    addCommand("[系统] 界面重置完成");
+    addCommand("[系统] 所有组件已重新初始化");
 }
 
 void MainWindow::on_action_about_triggered()
@@ -261,6 +497,19 @@ void MainWindow::on_action_about_triggered()
         "支持多相机显示、姿态监控、指令管理等功能\n\n"
         "开发团队: AI Assistant\n"
         "技术支持: Qt6.8 + CMake");
+}
+
+void MainWindow::on_action_keyboard_control_toggled(bool checked)
+{
+    m_keyboardController->setEnabled(checked);
+
+    if (checked) {
+        addCommand("[键盘] 键盘控制已启用 (W前进 S后退 A左转 D右转 Space急停)");
+        statusBar()->showMessage("键盘控制: 开启");
+    } else {
+        addCommand("[键盘] 键盘控制已禁用");
+        statusBar()->showMessage("键盘控制: 关闭");
+    }
 }
 
 void MainWindow::on_btn_clear_commands_clicked()
@@ -503,45 +752,108 @@ void MainWindow::refreshSerialPorts()
     }
 }
 
-void MainWindow::onSerialDataReceived(const QByteArray &data)
+void MainWindow::showTcpConnectionDialog()
 {
-    qDebug() << "��收到串口数据，长度:" << data.size();
-
-    if (!m_protocolParser) {
-        qDebug() << "协议解析器未初始化";
-        return;
+    // 如果已连接，先确认是否断开
+    if (m_tcpClient && m_tcpClient->isConnected()) {
+        auto reply = QMessageBox::question(this, "TCP连接",
+            QString("当前已连接到 %1:%2\n是否断开并重新连接？")
+                .arg(m_tcpClient->getROSHost()).arg(m_tcpClient->getROSPort()),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (reply == QMessageBox::No) {
+            return;
+        }
+        m_tcpClient->disconnectFromROS();
     }
 
-    // 尝试解析协议帧
-    Communication::ESP32State esp32State;
-    if (m_protocolParser->parseFromQByteArray(data, &esp32State)) {
-        qDebug() << "协议解析成功";
+    QDialog dialog(this);
+    dialog.setWindowTitle("TCP连接到ROS节点");
+    dialog.resize(400, 180);
 
-        // 转换为MotorState用于显示
-        MotorState displayState;
-        displayState.isOnline = true;
-        displayState.isRunning = true;
-        displayState.hasError = false;
-        displayState.timestamp = QDateTime::currentMSecsSinceEpoch();
+    QVBoxLayout* layout = new QVBoxLayout(&dialog);
 
-        // 转换6个关节数据
-        for (int i = 0; i < 6; ++i) {
-            displayState.joints[i].position = esp32State.joints[i].position / 1000.0f;  // 缩小1000倍
-            displayState.joints[i].current = esp32State.joints[i].current / 1000.0f;    // 缩小1000倍
-            displayState.joints[i].executor_position = esp32State.executor_position / 1000.0f;
-            displayState.joints[i].executor_torque = esp32State.executor_torque / 1000.0f;
-            displayState.joints[i].executor_flags = esp32State.executor_flags;
-            displayState.joints[i].reserved = esp32State.reserved;
+    QLabel* infoLabel = new QLabel("请输入ROS节点(Intel NUC)的IP地址和端口:");
+    layout->addWidget(infoLabel);
+
+    // IP地址输入
+    QHBoxLayout* ipLayout = new QHBoxLayout();
+    ipLayout->addWidget(new QLabel("IP地址:"));
+    QLineEdit* ipEdit = new QLineEdit("192.168.1.100");
+    ipEdit->setMinimumWidth(200);
+    ipEdit->setPlaceholderText("例如: 192.168.1.100");
+    ipLayout->addWidget(ipEdit);
+    layout->addLayout(ipLayout);
+
+    // 端口输入
+    QHBoxLayout* portLayout = new QHBoxLayout();
+    portLayout->addWidget(new QLabel("端口:"));
+    QSpinBox* portSpin = new QSpinBox();
+    portSpin->setRange(1, 65535);
+    portSpin->setValue(9090);
+    portSpin->setMinimumWidth(200);
+    portLayout->addWidget(portSpin);
+    layout->addLayout(portLayout);
+
+    // 按钮
+    QDialogButtonBox* buttonBox = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    layout->addWidget(buttonBox);
+
+    connect(buttonBox, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() == QDialog::Accepted) {
+        QString host = ipEdit->text().trimmed();
+        quint16 port = static_cast<quint16>(portSpin->value());
+
+        if (host.isEmpty()) {
+            addError("[TCP] IP地址不能为空");
+            return;
         }
 
-        // 更新UI显示
-        updateJointsData(displayState);
-
-        // 在命令区域添加接收消息
-        addCommand("[串口] 接收并解析关节数据成功");
-
-    } else {
-        qDebug() << "协议解析失败";
-        addError("[错误] 协议帧解析失败");
+        addCommand(QString("[TCP] 正在连接到 %1:%2 ...").arg(host).arg(port));
+        bool success = m_tcpClient->connectToROS(host, port);
+        if (!success) {
+            addError(QString("[TCP] 连接失败: %1:%2").arg(host).arg(port));
+        }
     }
+}
+
+void MainWindow::onSerialDataReceived(const QByteArray &data)
+{
+    // 显示原始USB-CDC数据（用于调试帧头问题）
+    qDebug() << "[USB-CDC] 收到数据，长度:" << data.size()
+             << "内容:" << data.toHex(' ');
+
+    // 在命令窗口显示接收到的数据
+    addCommand(QString("[串口] 收到���据 长度:%1 内容:%2")
+               .arg(data.size())
+               .arg(data.toHex(' ')));
+
+    // 检查是否包含帧头 0xAA
+    if (data.contains(0xAA)) {
+        addCommand("[串口] ✓ 检测到帧头 0xAA");
+    } else {
+        addCommand("[串口] ✗ 未检测到帧头 0xAA");
+
+        // 显示每个字节的十进制值
+        QString byteStr = "[串口] 字节值: ";
+        for (int i = 0; i < data.size(); ++i) {
+            byteStr += QString("%1 ").arg(static_cast<uint8_t>(data[i]));
+        }
+        addCommand(byteStr);
+    }
+}
+
+void MainWindow::onCompleteFrameReceived(const QByteArray &frame)
+{
+    // 注意：实际的协议解析已经移到 SerialPortManager 中
+    // 解析后的数据会通过 onEsp32StateReceived 槽函数接收
+    Q_UNUSED(frame)
+}
+
+void MainWindow::onEsp32StateReceived(const Communication::ESP32State &state)
+{
+    // 直接使用ESP32State更新UI显示
+    updateJointsData(state);
 }

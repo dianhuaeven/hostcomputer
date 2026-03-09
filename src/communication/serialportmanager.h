@@ -8,6 +8,8 @@
 #include <QString>
 #include <QStringList>
 #include <QTimer>
+#include "../parser/ProtocolParser.h"
+#include "SharedStructs.h"
 
 namespace Communication {
 
@@ -42,6 +44,9 @@ public:
     bool sendData(const QByteArray &data);
     bool sendText(const QString &text);
 
+    // 发送控制命令
+    bool sendCommand(const Communication::Command &command);
+
     // 状态查询
     QString getPortName() const;
     int getBaudRate() const;
@@ -55,6 +60,12 @@ signals:
     // 数据接收信号
     void dataReceived(const QByteArray &data);
     void textReceived(const QString &text);
+
+    // 完整协议帧接收信号
+    void completeFrameReceived(const QByteArray &frame);
+
+    // 解析后的ESP32状态数据信号
+    void esp32StateReceived(const Communication::ESP32State &state);
 
     // 状态变化信号
     void portOpened(const QString &portName);
@@ -72,6 +83,7 @@ private slots:
 private:
     void setupConnections();
     void emitError(const QString &message);
+    void processFrameBuffer(); // 处理协议帧缓冲
 
 private:
     QSerialPort *m_serialPort;
@@ -79,11 +91,19 @@ private:
     int m_baudRate;
     QByteArray m_receivedData;
 
+    // 协议解析器
+    Parser::ProtocolParser m_protocolParser;
+
+    // 协议帧缓冲
+    QByteArray m_frameBuffer;
+    static constexpr int PROTOCOL_FRAME_SIZE = 52; // ESP32协议帧大小
+    static constexpr uint8_t FRAME_HEADER = 0xAA; // 帧头标识
+
     // 可选：数据缓冲和超时处理
     QTimer *m_timeoutTimer;
     static const int DEFAULT_TIMEOUT_MS = 1000;
 };
 
-} // namespace Communication
+}
 
 #endif // SERIALPORTMANAGER_H

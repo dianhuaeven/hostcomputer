@@ -187,89 +187,7 @@
         <property name="title">
          <string>相机画面</string>
         </property>
-        <layout class="QGridLayout" name="gridLayout_cameras">
-         <property name="spacing">
-          <number>3</number>
-         </property>
-         <item row="0" column="0">
-          <widget class="VideoWidget" name="camera_1">
-           <property name="minimumSize">
-            <size>
-             <width>390</width>
-             <height>290</height>
-            </size>
-           </property>
-           <property name="styleSheet">
-            <string>border: 2px solid #cccccc; background-color: #000000;</string>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="1">
-          <widget class="VideoWidget" name="camera_2">
-           <property name="minimumSize">
-            <size>
-             <width>390</width>
-             <height>290</height>
-            </size>
-           </property>
-           <property name="styleSheet">
-            <string>border: 2px solid #cccccc; background-color: #000000;</string>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="2">
-          <widget class="VideoWidget" name="camera_3">
-           <property name="minimumSize">
-            <size>
-             <width>390</width>
-             <height>290</height>
-            </size>
-           </property>
-           <property name="styleSheet">
-            <string>border: 2px solid #cccccc; background-color: #000000;</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="0">
-          <widget class="VideoWidget" name="camera_4">
-           <property name="minimumSize">
-            <size>
-             <width>390</width>
-             <height>290</height>
-            </size>
-           </property>
-           <property name="styleSheet">
-            <string>border: 2px solid #cccccc; background-color: #000000;</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="1">
-          <widget class="VideoWidget" name="camera_5">
-           <property name="minimumSize">
-            <size>
-             <width>390</width>
-             <height>290</height>
-            </size>
-           </property>
-           <property name="styleSheet">
-            <string>border: 2px solid #cccccc; background-color: #000000;</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="2">
-          <widget class="VideoWidget" name="camera_6">
-           <property name="minimumSize">
-            <size>
-             <width>390</width>
-             <height>290</height>
-            </size>
-           </property>
-           <property name="styleSheet">
-            <string>border: 2px solid #cccccc; background-color: #000000;</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
+        <layout class="QVBoxLayout" name="verticalLayout_cameras"/>
        </widget>
       </item>
       <item>
@@ -290,48 +208,7 @@
           </property>
           <layout class="QVBoxLayout" name="verticalLayout_car_model">
            <item>
-            <widget class="QLabel" name="car_model_display">
-             <property name="minimumSize">
-              <size>
-               <width>380</width>
-               <height>260</height>
-              </size>
-             </property>
-             <property name="styleSheet">
-              <string>border: 2px solid #cccccc; background-color: #f8f8f8;</string>
-             </property>
-             <property name="text">
-              <string>3D姿态模型显示区域</string>
-             </property>
-             <property name="alignment">
-              <set>Qt::AlignmentFlag::AlignCenter</set>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <layout class="QHBoxLayout" name="horizontalLayout_car_info">
-             <item>
-              <widget class="QLabel" name="label_roll">
-               <property name="text">
-                <string>Roll: 0°</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLabel" name="label_pitch">
-               <property name="text">
-                <string>Pitch: 0°</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLabel" name="label_yaw">
-               <property name="text">
-                <string>Yaw: 0°</string>
-               </property>
-              </widget>
-             </item>
-            </layout>
+            <widget class="QWidget" name="CarWidget" native="true"/>
            </item>
           </layout>
          </widget>
@@ -492,9 +369,10 @@
    </property>
    <widget class="QMenu" name="menu_file">
     <property name="title">
-     <string>文件</string>
+     <string>连接</string>
     </property>
     <addaction name="action_connect"/>
+    <addaction name="action_tcp_connect"/>
     <addaction name="action_disconnect"/>
     <addaction name="separator"/>
     <addaction name="action_exit"/>
@@ -506,15 +384,15 @@
     <addaction name="action_fullscreen"/>
     <addaction name="action_reset_layout"/>
    </widget>
-   <widget class="QMenu" name="menu_help">
+   <widget class="QMenu" name="menu_control">
     <property name="title">
-     <string>帮助</string>
+     <string>控制</string>
     </property>
-    <addaction name="action_about"/>
+    <addaction name="action_keyboard_control"/>
    </widget>
    <addaction name="menu_file"/>
    <addaction name="menu_view"/>
-   <addaction name="menu_help"/>
+   <addaction name="menu_control"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
   <action name="action_connect">
@@ -551,12 +429,37 @@
   </action>
   <action name="action_reset_layout">
    <property name="text">
-    <string>重置布局</string>
+    <string>刷新</string>
+   </property>
+   <property name="toolTip">
+    <string>刷新</string>
    </property>
   </action>
   <action name="action_about">
    <property name="text">
     <string>关于</string>
+   </property>
+  </action>
+  <action name="action_tcp_connect">
+   <property name="text">
+    <string>TCP连接(ROS)</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+T</string>
+   </property>
+  </action>
+  <action name="action_keyboard_control">
+   <property name="text">
+    <string>键盘控制</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+K</string>
+   </property>
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
    </property>
   </action>
  </widget>
