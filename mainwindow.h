@@ -10,6 +10,9 @@
 
 #include "src/controller/KeyboardController.h"
 #include "src/controller/DisplayLayoutManager.h"
+#include "src/controller/CO2DisplayWidget.h"
+#include "src/controller/GamepadDisplayWidget.h"
+#include "src/controller/handlekey.h"
 
 namespace Communication {
     class SerialPortManager;
@@ -86,6 +89,7 @@ private slots:
     void onSerialDataReceived(const QByteArray &data);
     void onCompleteFrameReceived(const QByteArray &frame);
     void onEsp32StateReceived(const Communication::ESP32State &state);
+    void onGamepadStateReceived(const ControllerState &state);
     void showSerialPortSelection();
     void showTcpConnectionDialog();
     void refreshSerialPorts();
@@ -104,6 +108,15 @@ private:
 
     // 布局管理器
     DisplayLayoutManager* m_displayLayout;
+
+    // CO2显示控件
+    CO2DisplayWidget* m_co2Widget;
+
+    // 手柄显示控件
+    GamepadDisplayWidget* m_gamepadWidget;
+
+    // 手柄输入驱动
+    HandleKey* m_handleKey;
 
     // 状态管理
     bool m_isConnected = false;

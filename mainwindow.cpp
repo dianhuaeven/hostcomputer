@@ -35,6 +35,9 @@ MainWindow::MainWindow(QWidget *parent)
     , m_tcpClient(nullptr)
     , m_keyboardController(nullptr)
     , m_displayLayout(nullptr)
+    , m_co2Widget(nullptr)
+    , m_gamepadWidget(nullptr)
+    , m_handleKey(nullptr)
 {
     ui->setupUi(this);
 
@@ -88,6 +91,11 @@ MainWindow::MainWindow(QWidget *parent)
     });
     // 默认启用键盘控制
     m_keyboardController->setEnabled(true);
+
+    // 初始化手柄输入驱动 (UDP端口9700)
+    m_handleKey = new HandleKey(this);
+    connect(m_handleKey, &HandleKey::getHandleKey,
+            this, &MainWindow::onGamepadStateReceived);
 
     // 初始化定时器
     m_statusTimer = new QTimer(this);
@@ -146,6 +154,15 @@ void MainWindow::setupDisplayLayout()
     // 创建布局管理器（2行3列）
     m_displayLayout = new DisplayLayoutManager(2, 3, this);
 
+    // 创建CO2显示控件并放到布局格子中（索引5 = 第2行第3列）
+    m_co2Widget = new CO2DisplayWidget();
+    m_displayLayout->setWidget(5, m_co2Widget);
+
+    // 创建手柄显示控件，放到右侧面板（小车姿态模型下方）
+    m_gamepadWidget = new GamepadDisplayWidget();
+    m_gamepadWidget->setMaximumHeight(180);
+    ui->verticalLayout_right->insertWidget(1, m_gamepadWidget);
+
     // 把 DisplayLayoutManager 塞进 group_cameras 的布局中
     ui->group_cameras->layout()->addWidget(m_displayLayout);
 }
@@ -178,6 +195,14 @@ void MainWindow::setupTcpClient()
     // 连接数据接收信号
     connect(m_tcpClient, &Communication::ROS1TcpClient::motorStateReceived,
             this, &MainWindow::onEsp32StateReceived);
+
+    connect(m_tcpClient, &Communication::ROS1TcpClient::environmentDataReceived,
+            this, [this](const Communication::EnvironmentData &envData) {
+        if (m_co2Widget) {
+            m_co2Widget->setCO2Value(envData.co2_ppm);
+        }
+        addCommand(QString("[环境] CO\u2082浓度: %1 ppm").arg(envData.co2_ppm, 0, 'f', 0));
+    });
 
     connect(m_tcpClient, &Communication::ROS1TcpClient::systemStatusReceived, this, [this](const QJsonObject &status) {
         addCommand(QString("[TCP] 收到系统状态: %1").arg(
@@ -460,6 +485,12 @@ void MainWindow::reinitialize()
     if (m_displayLayout) {
         delete m_displayLayout;
         m_displayLayout = nullptr;
+        m_co2Widget = nullptr;  // CO2控件随布局一起销毁
+    }
+
+    if (m_gamepadWidget) {
+        delete m_gamepadWidget;
+        m_gamepadWidget = nullptr;
     }
 
     // 4. 重置状态变量
@@ -856,4 +887,95 @@ void MainWindow::onEsp32StateReceived(const Communication::ESP32State &state)
 {
     // 直接使用ESP32State更新UI显示
     updateJointsData(state);
+}
+
+void MainWindow::onGamepadStateReceived(const ControllerState &state)
+{
+    // === 1. 更新 GamepadDisplayWidget 显示 ===
+    if (m_gamepadWidget) {
+        // 摇杆归一化到 -1.0 ~ 1.0
+        float lx = state.sThumbLX / 32767.0f;
+        float ly = state.sThumbLY / 32767.0f;
+        float rx = state.sThumbRX / 32767.0f;
+        float ry = state.sThumbRY / 32767.0f;
+        float lt = state.bLeftTrigger / 255.0f;
+        float rt = state.bRightTrigger / 255.0f;
+
+        m_gamepadWidget->updateAxis("LX", lx);
+        m_gamepadWidget->updateAxis("LY", ly);
+        m_gamepadWidget->updateAxis("RX", rx);
+        m_gamepadWidget->updateAxis("RY", ry);
+        m_gamepadWidget->updateAxis("LT", lt);
+        m_gamepadWidget->updateAxis("RT", rt);
+
+        // 按钮状态显示
+        if (state.buttonA) m_gamepadWidget->updateButton("A", true);
+        else if (state.buttonB) m_gamepadWidget->updateButton("B", true);
+        else if (state.buttonX) m_gamepadWidget->updateButton("X", true);
+        else if (state.buttonY) m_gamepadWidget->updateButton("Y", true);
+        else if (state.leftShoulder) m_gamepadWidget->updateButton("LB", true);
+        else if (state.rightShoulder) m_gamepadWidget->updateButton("RB", true);
+        else if (state.buttonBack) m_gamepadWidget->updateButton("Back", true);
+        else if (state.buttonStart) m_gamepadWidget->updateButton("Start", true);
+        else if (state.dpadUp) m_gamepadWidget->updateButton("DPad↑", true);
+        else if (state.dpadDown) m_gamepadWidget->updateButton("DPad↓", true);
+        else if (state.dpadLeft) m_gamepadWidget->updateButton("DPad←", true);
+        else if (state.dpadRight) m_gamepadWidget->updateButton("DPad→", true);
+        else m_gamepadWidget->updateButton("--", false);
+    }
+
+    // === 2. 手柄映射为速度命令 ===
+    // 左摇杆Y轴 → 前后线速度 (linearX)
+    // 右摇杆X轴 → 左右角速度 (angularZ)
+    // 死区阈值: 摇杆值 < 3000 视为零
+    const int16_t DEADZONE = 3000;
+    const float MAX_LINEAR_SPEED = 0.5f;   // 最大线速度 m/s
+    const float MAX_ANGULAR_SPEED = 1.0f;  // 最大角速度 rad/s
+
+    float linearX = 0.0f;
+    float angularZ = 0.0f;
+
+    // 左摇杆Y轴 → linearX (前后)
+    if (qAbs(state.sThumbLY) > DEADZONE) {
+        linearX = (state.sThumbLY / 32767.0f) * MAX_LINEAR_SPEED;
+    }
+
+    // 右摇杆X轴 → angularZ (左右转)
+    if (qAbs(state.sThumbRX) > DEADZONE) {
+        angularZ = -(state.sThumbRX / 32767.0f) * MAX_ANGULAR_SPEED;
+    }
+
+    // A按钮 → 急停
+    if (state.buttonA) {
+        linearX = 0.0f;
+        angularZ = 0.0f;
+        if (m_tcpClient && m_tcpClient->isConnected()) {
+            m_tcpClient->sendEmergencyStop();
+        }
+        addCommand("[手柄] 急停!");
+        return;
+    }
+
+    // === 3. 发送速度命令 ===
+    if (m_tcpClient && m_tcpClient->isConnected()) {
+        m_tcpClient->sendVelocityCommand(linearX, 0.0f, angularZ);
+    }
+
+    // 方向变化日志（防止刷屏）
+    static float lastLx = 0.0f, lastAz = 0.0f;
+    bool changed = (qAbs(linearX - lastLx) > 0.01f || qAbs(angularZ - lastAz) > 0.01f);
+    if (changed) {
+        lastLx = linearX;
+        lastAz = angularZ;
+        bool isStopped = (linearX == 0.0f && angularZ == 0.0f);
+        if (!isStopped) {
+            QString dir;
+            if (linearX > 0) dir += "前进 ";
+            if (linearX < 0) dir += "后退 ";
+            if (angularZ > 0) dir += "左转 ";
+            if (angularZ < 0) dir += "右转 ";
+            addCommand(QString("[手柄] %1 (lx=%.2f az=%.2f) 模式:%3")
+                       .arg(dir.trimmed()).arg(linearX).arg(angularZ).arg(state.modeIndex));
+        }
+    }
 }

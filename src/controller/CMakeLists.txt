@@ -14,10 +14,16 @@
 set(CONTROLLER_SOURCES
     controller.cpp
     controller.h
+    CO2DisplayWidget.cpp
+    CO2DisplayWidget.h
+    GamepadDisplayWidget.cpp
+    GamepadDisplayWidget.h
     DisplayLayoutManager.cpp
     DisplayLayoutManager.h
     KeyboardController.cpp
     KeyboardController.h
+    handlekey.cpp
+    handlekey.h
     RealCameraManager.cpp
     RealCameraManager.h
 )
@@ -29,6 +35,7 @@ add_library(controller_layer STATIC ${CONTROLLER_SOURCES})
 target_link_libraries(controller_layer PUBLIC
     Qt6::Core
     Qt6::Widgets
+    Qt6::Network
     Qt6::Multimedia
     Qt6::MultimediaWidgets
 
