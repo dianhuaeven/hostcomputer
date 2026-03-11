@@ -346,23 +346,10 @@ void MainWindow::updateJointsData(const Communication::ESP32State& esp32State)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    QMessageBox::StandardButton reply = QMessageBox::question(
-        this,
-        "确认退出",
-        "确定要退出控制系统吗",
-        QMessageBox::Yes | QMessageBox::No,
-        QMessageBox::No
-    );
-
-    if (reply == QMessageBox::Yes) {
-        if (m_isConnected) {
-            // 发送断开连接命令
-            updateConnectionStatus(false);
-        }
-        event->accept();
-    } else {
-        event->ignore();
+    if (m_isConnected) {
+        updateConnectionStatus(false);
     }
+    event->accept();
 }
 
 void MainWindow::keyPressEvent(QKeyEvent *event)
