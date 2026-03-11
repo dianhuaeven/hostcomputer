@@ -28,6 +28,12 @@ class MainWindow;
 }
 QT_END_NAMESPACE
 
+// 控制模式枚举
+enum class ControlMode {
+    Vehicle = 0,  // 车体运动模式 (D-Pad上)
+    Arm = 2       // 机械臂操控模式 (D-Pad下)
+};
+
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -40,7 +46,7 @@ public:
     void updateConnectionStatus(bool connected);
     void updateHeartbeatStatus(bool online);
     void updateFPS(int fps);
-    void updateCPUUsage(int cpu, int gpu);
+    void updateBandwidthAndPacketLoss();
     void updateMotorMode(const QString& mode);
     void addCommand(const QString& command);
     void addError(const QString& error);
@@ -65,6 +71,7 @@ private slots:
 
     void on_btn_clear_commands_clicked();
     void on_btn_clear_errors_clicked();
+    void on_btn_emergency_stop_clicked();
 
     void updateSystemStatus();  // 定时更新系统状态
 
@@ -85,11 +92,18 @@ private:
     QStringList getAvailableSerialPorts();
     bool connectToSerialPort(const QString& portName, int baudRate);
 
+    // 模式切换
+    void switchControlMode(ControlMode mode);
+    void handleGamepadVehicleMode(const ControllerState &state);
+    void handleGamepadArmMode(const ControllerState &state);
+
 private slots:
     void onSerialDataReceived(const QByteArray &data);
     void onCompleteFrameReceived(const QByteArray &frame);
     void onEsp32StateReceived(const Communication::ESP32State &state);
     void onGamepadStateReceived(const ControllerState &state);
+    void onCO2DataReceived(float ppm);
+    void onIMUDataReceived(float roll, float pitch, float yaw, float accelX, float accelY, float accelZ);
     void showSerialPortSelection();
     void showTcpConnectionDialog();
     void refreshSerialPorts();
@@ -122,10 +136,16 @@ private:
     bool m_isConnected = false;
     bool m_heartbeatOnline = false;
     int m_currentFPS = 0;
-    int m_cpuUsage = 0;
-    int m_gpuUsage = 0;
+    // 带宽与丢包统计
+    quint64 m_lastBytesSent = 0;
+    quint64 m_lastBytesReceived = 0;
+    quint64 m_lastMessagesSent = 0;
+    quint64 m_lastMessagesReceived = 0;
     QString m_motorMode = "待机";
     int m_errorCount = 0;
+
+    // 控制模式
+    ControlMode m_controlMode = ControlMode::Vehicle;
 
     // 定时器
     QTimer* m_statusTimer;

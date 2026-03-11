@@ -65,6 +65,8 @@ signals:
     void jointDataReceived(int jointId, float position, float current, float torque);
     void systemStatusReceived(const QJsonObject &status);
     void rawMessageReceived(const QByteArray &message);
+    void co2DataReceived(float ppm);
+    void imuDataReceived(float roll, float pitch, float yaw, float accelX, float accelY, float accelZ);
 
     // 统计信息更新信号
     void statsUpdated(const Stats &stats);

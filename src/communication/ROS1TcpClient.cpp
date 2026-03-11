@@ -417,6 +417,17 @@ void ROS1TcpClient::processReceivedData()
             emit jointDataReceived(jointId, position, current, torque);
         } else if (msgType == "system_status") {
             emit systemStatusReceived(msg);
+        } else if (msgType == "co2_data") {
+            float ppm = msg["ppm"].toDouble();
+            emit co2DataReceived(ppm);
+        } else if (msgType == "imu_data") {
+            float roll = msg["roll"].toDouble();
+            float pitch = msg["pitch"].toDouble();
+            float yaw = msg["yaw"].toDouble();
+            float accelX = msg["accel_x"].toDouble();
+            float accelY = msg["accel_y"].toDouble();
+            float accelZ = msg["accel_z"].toDouble();
+            emit imuDataReceived(roll, pitch, yaw, accelX, accelY, accelZ);
         }
     }
 

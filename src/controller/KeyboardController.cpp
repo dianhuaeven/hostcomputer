@@ -8,6 +8,9 @@ KeyboardController::KeyboardController(QObject *parent)
     , m_angularSpeed(1.0f)
     , m_linearX(0.0f)
     , m_angularZ(0.0f)
+    , m_controlMode(0)
+    , m_selectedJoint(0)
+    , m_jointSpeed(0.1f)
 {
     m_sendTimer = new QTimer(this);
     m_sendTimer->setInterval(SEND_INTERVAL_MS);
@@ -25,7 +28,7 @@ void KeyboardController::handleKeyPress(QKeyEvent *event)
 
     int key = event->key();
 
-    // 急停
+    // 急停（两种模式通用）
     if (key == Qt::Key_Space) {
         m_pressedKeys.clear();
         m_linearX = 0.0f;
@@ -35,13 +38,47 @@ void KeyboardController::handleKeyPress(QKeyEvent *event)
         return;
     }
 
-    m_pressedKeys.insert(key);
-    computeVelocity();
+    if (m_controlMode == 2) {
+        // === 机械臂模式 ===
+        // 数字键1-6选择关节
+        if (key >= Qt::Key_1 && key <= Qt::Key_6) {
+            m_selectedJoint = key - Qt::Key_1;
+            qDebug() << "[键盘-机械臂] 选中关节:" << m_selectedJoint;
+            return;
+        }
+        // W/↑ 当前关节位置+
+        if (key == Qt::Key_W || key == Qt::Key_Up) {
+            emit jointControlRequested(m_selectedJoint, m_jointSpeed, m_jointSpeed);
+            return;
+        }
+        // S/↓ 当前关节位置-
+        if (key == Qt::Key_S || key == Qt::Key_Down) {
+            emit jointControlRequested(m_selectedJoint, -m_jointSpeed, m_jointSpeed);
+            return;
+        }
+        // A/← 执行器闭合
+        if (key == Qt::Key_A || key == Qt::Key_Left) {
+            emit executorControlRequested(-1.0f);
+            return;
+        }
+        // D/→ 执行器张开
+        if (key == Qt::Key_D || key == Qt::Key_Right) {
+            emit executorControlRequested(1.0f);
+            return;
+        }
+    } else {
+        // === 车体模式 ===
+        m_pressedKeys.insert(key);
+        computeVelocity();
+    }
 }
 
 void KeyboardController::handleKeyRelease(QKeyEvent *event)
 {
     if (!m_enabled || event->isAutoRepeat()) return;
+
+    // 机械臂模式下不处理释放事件
+    if (m_controlMode == 2) return;
 
     m_pressedKeys.remove(event->key());
     computeVelocity();
@@ -74,7 +111,10 @@ void KeyboardController::computeVelocity()
 
 void KeyboardController::updateVelocity()
 {
-    emit velocityChanged(m_linearX, 0.0f, m_angularZ);
+    // 仅车体模式下周期发送速度
+    if (m_controlMode == 0) {
+        emit velocityChanged(m_linearX, 0.0f, m_angularZ);
+    }
 }
 
 void KeyboardController::setEnabled(bool enabled)
@@ -103,3 +143,17 @@ float KeyboardController::linearSpeed() const { return m_linearSpeed; }
 
 void KeyboardController::setAngularSpeed(float speed) { m_angularSpeed = speed; }
 float KeyboardController::angularSpeed() const { return m_angularSpeed; }
+
+void KeyboardController::setControlMode(int mode)
+{
+    if (m_controlMode == mode) return;
+    m_controlMode = mode;
+    // 切换模式时清空按键状态，重置关节选择
+    m_pressedKeys.clear();
+    m_linearX = 0.0f;
+    m_angularZ = 0.0f;
+    m_selectedJoint = 0;
+    qDebug() << "[键盘] 控制模式切换:" << (mode == 0 ? "车体" : "机械臂");
+}
+
+int KeyboardController::controlMode() const { return m_controlMode; }

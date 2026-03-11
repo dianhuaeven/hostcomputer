@@ -123,14 +123,14 @@
        <item>
         <widget class="QLabel" name="label_cpu">
          <property name="text">
-          <string>CPU/GPU:</string>
+          <string>带宽压力:</string>
          </property>
         </widget>
        </item>
        <item>
         <widget class="QLabel" name="label_cpu_value">
          <property name="text">
-          <string>0% / 0%</string>
+          <string>0%</string>
          </property>
         </widget>
        </item>
@@ -167,6 +167,47 @@
           </size>
          </property>
         </spacer>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_emergency_stop">
+         <property name="minimumSize">
+          <size>
+           <width>120</width>
+           <height>50</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>120</width>
+           <height>50</height>
+          </size>
+         </property>
+         <property name="font">
+          <font>
+           <pointsize>14</pointsize>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="styleSheet">
+          <string>QPushButton {
+    background-color: #FF0000;
+    color: white;
+    border: 2px solid #CC0000;
+    border-radius: 8px;
+    font-weight: bold;
+}
+QPushButton:hover {
+    background-color: #CC0000;
+}
+QPushButton:pressed {
+    background-color: #990000;
+}</string>
+         </property>
+         <property name="text">
+          <string>急停</string>
+         </property>
+        </widget>
        </item>
       </layout>
      </widget>

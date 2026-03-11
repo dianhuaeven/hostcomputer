@@ -89,6 +89,24 @@ MainWindow::MainWindow(QWidget *parent)
             addCommand("[键盘] 急停!");
         }
     });
+    // 键盘机械臂模式信号
+    connect(m_keyboardController, &KeyboardController::jointControlRequested,
+            this, [this](int jointId, float position, float velocity) {
+        if (m_tcpClient && m_tcpClient->isConnected()) {
+            m_tcpClient->sendJointControl(jointId, position, velocity);
+            addCommand(QString("[键盘-机械臂] 关节%1 位置:%2 速度:%3")
+                       .arg(jointId).arg(position, 0, 'f', 3).arg(velocity, 0, 'f', 3));
+        }
+    });
+    connect(m_keyboardController, &KeyboardController::executorControlRequested,
+            this, [this](float value) {
+        if (m_tcpClient && m_tcpClient->isConnected()) {
+            QJsonObject params;
+            params["value"] = value;
+            m_tcpClient->sendSystemCommand("executor_control", params);
+            addCommand(QString("[键盘-机械臂] 执行器: %1").arg(value > 0 ? "张开" : "闭合"));
+        }
+    });
     // 默认启用键盘控制
     m_keyboardController->setEnabled(true);
 
@@ -196,18 +214,18 @@ void MainWindow::setupTcpClient()
     connect(m_tcpClient, &Communication::ROS1TcpClient::motorStateReceived,
             this, &MainWindow::onEsp32StateReceived);
 
-    connect(m_tcpClient, &Communication::ROS1TcpClient::environmentDataReceived,
-            this, [this](const Communication::EnvironmentData &envData) {
-        if (m_co2Widget) {
-            m_co2Widget->setCO2Value(envData.co2_ppm);
-        }
-        addCommand(QString("[环境] CO\u2082浓度: %1 ppm").arg(envData.co2_ppm, 0, 'f', 0));
-    });
-
     connect(m_tcpClient, &Communication::ROS1TcpClient::systemStatusReceived, this, [this](const QJsonObject &status) {
         addCommand(QString("[TCP] 收到系统状态: %1").arg(
             QString(QJsonDocument(status).toJson(QJsonDocument::Compact))));
     });
+
+    // CO2数据接收
+    connect(m_tcpClient, &Communication::ROS1TcpClient::co2DataReceived,
+            this, &MainWindow::onCO2DataReceived);
+
+    // IMU数据接收
+    connect(m_tcpClient, &Communication::ROS1TcpClient::imuDataReceived,
+            this, &MainWindow::onIMUDataReceived);
 }
 
 void MainWindow::setupConnections()
@@ -250,11 +268,45 @@ void MainWindow::updateFPS(int fps)
     ui->label_fps_value->setText(QString("%1 FPS").arg(fps));
 }
 
-void MainWindow::updateCPUUsage(int cpu, int gpu)
+void MainWindow::updateBandwidthAndPacketLoss()
 {
-    m_cpuUsage = cpu;
-    m_gpuUsage = gpu;
-    ui->label_cpu_value->setText(QString("%1% / %2%").arg(cpu).arg(gpu));
+    if (!m_tcpClient) {
+        ui->label_cpu->setText("带宽压力:");
+        ui->label_cpu_value->setText("N/A");
+        return;
+    }
+
+    auto stats = m_tcpClient->getStats();
+
+    // 计算带宽压力（本周期收发字节数，单位KB/s，定时器间隔1秒）
+    quint64 deltaBytes = (stats.bytesSent - m_lastBytesSent) + (stats.bytesReceived - m_lastBytesReceived);
+    double bandwidthKBs = deltaBytes / 1024.0;
+    m_lastBytesSent = stats.bytesSent;
+    m_lastBytesReceived = stats.bytesReceived;
+
+    // 带宽压力等级
+    QString pressure;
+    if (bandwidthKBs < 10.0)
+        pressure = QString("%1 KB/s (低)").arg(bandwidthKBs, 0, 'f', 1);
+    else if (bandwidthKBs < 100.0)
+        pressure = QString("%1 KB/s (中)").arg(bandwidthKBs, 0, 'f', 1);
+    else
+        pressure = QString("%1 KB/s (高)").arg(bandwidthKBs, 0, 'f', 1);
+
+    ui->label_cpu->setText("带宽压力:");
+    ui->label_cpu_value->setText(pressure);
+
+    // 计算丢包概率：发送数 - 接收数的��值比例
+    quint64 deltaSent = stats.messagesSent - m_lastMessagesSent;
+    quint64 deltaReceived = stats.messagesReceived - m_lastMessagesReceived;
+    m_lastMessagesSent = stats.messagesSent;
+    m_lastMessagesReceived = stats.messagesReceived;
+
+    double lossRate = 0.0;
+    if (deltaSent > 0 && deltaSent > deltaReceived) {
+        lossRate = (double)(deltaSent - deltaReceived) / deltaSent * 100.0;
+    }
+    ui->label_cpu_value->setText(QString("%1 | 丢包: %2%").arg(pressure).arg(lossRate, 0, 'f', 1));
 }
 
 void MainWindow::updateMotorMode(const QString& mode)
@@ -484,8 +536,10 @@ void MainWindow::reinitialize()
     m_isConnected = false;
     m_heartbeatOnline = false;
     m_currentFPS = 0;
-    m_cpuUsage = 0;
-    m_gpuUsage = 0;
+    m_lastBytesSent = 0;
+    m_lastBytesReceived = 0;
+    m_lastMessagesSent = 0;
+    m_lastMessagesReceived = 0;
     m_motorMode = "待机";
     m_errorCount = 0;
 
@@ -544,6 +598,43 @@ void MainWindow::on_btn_clear_errors_clicked()
     addCommand("[系统] 错误记录已清空");
 }
 
+void MainWindow::on_btn_emergency_stop_clicked()
+{
+    // === 最高优先级急停处理 ===
+    addCommand("[急停] ⚠️ 用户触发急停按钮!");
+
+    // 1. 立即停止所有运动（TCP通道）
+    if (m_tcpClient && m_tcpClient->isConnected()) {
+        m_tcpClient->sendEmergencyStop();
+        m_tcpClient->sendVelocityCommand(0.0f, 0.0f, 0.0f);
+        addCommand("[急停] TCP急停指令已发送");
+    }
+
+    // 2. 清空键盘控制器状态
+    if (m_keyboardController) {
+        m_keyboardController->setEnabled(false);
+        m_keyboardController->setEnabled(true);  // 重置状态
+        addCommand("[急停] 键盘控制器已重置");
+    }
+
+    // 3. 切换回车体模式（安全模式）
+    if (m_controlMode != ControlMode::Vehicle) {
+        switchControlMode(ControlMode::Vehicle);
+        addCommand("[急停] 已切换回车体模式");
+    }
+
+    // 4. 状态栏提示
+    statusBar()->showMessage("⚠️ 急停已触发！所有运动已停止", 5000);
+
+    // 5. 视觉反馈：按钮闪烁效果
+    QPushButton* btn = ui->btn_emergency_stop;
+    QString originalStyle = btn->styleSheet();
+    btn->setStyleSheet("QPushButton { background-color: #FFFF00; color: black; border: 3px solid #FF0000; }");
+    QTimer::singleShot(500, this, [btn, originalStyle]() {
+        btn->setStyleSheet(originalStyle);
+    });
+}
+
 void MainWindow::updateSystemStatus()
 {
     // 模拟系统状态更新
@@ -557,11 +648,9 @@ void MainWindow::updateSystemStatus()
         updateFPS(simulatedFPS);
     }
 
-    // 模拟CPU/GPU使用率
+    // 更新带宽压力与丢包概率
     if (counter % 5 == 0) {
-        int simulatedCPU = 20 + (counter % 30);
-        int simulatedGPU = 15 + (counter % 25);
-        updateCPUUsage(simulatedCPU, simulatedGPU);
+        updateBandwidthAndPacketLoss();
     }
 }
 
@@ -876,6 +965,22 @@ void MainWindow::onEsp32StateReceived(const Communication::ESP32State &state)
     updateJointsData(state);
 }
 
+void MainWindow::onCO2DataReceived(float ppm)
+{
+    if (m_co2Widget) {
+        m_co2Widget->setCO2Value(ppm);
+    }
+}
+
+void MainWindow::onIMUDataReceived(float roll, float pitch, float yaw,
+                                    float accelX, float accelY, float accelZ)
+{
+    Q_UNUSED(accelX)
+    Q_UNUSED(accelY)
+    Q_UNUSED(accelZ)
+    updateCarAttitude(roll, pitch, yaw);
+}
+
 void MainWindow::onGamepadStateReceived(const ControllerState &state)
 {
     // === 1. 更新 GamepadDisplayWidget 显示 ===
@@ -906,23 +1011,60 @@ void MainWindow::onGamepadStateReceived(const ControllerState &state)
         else m_gamepadWidget->updateButton("--", false);
     }
 
-    // === 2. 手柄映射为速度命令 ===
+    // === 2. D-Pad检测模式切换 ===
+    if (state.dpadUp) {
+        switchControlMode(ControlMode::Vehicle);
+        return;
+    }
+    if (state.dpadDown) {
+        switchControlMode(ControlMode::Arm);
+        return;
+    }
+
+    // === 3. 根据当前模式分发控制逻辑 ===
+    if (m_controlMode == ControlMode::Arm) {
+        handleGamepadArmMode(state);
+    } else {
+        handleGamepadVehicleMode(state);
+    }
+}
+
+void MainWindow::switchControlMode(ControlMode mode)
+{
+    if (m_controlMode == mode) return;
+    m_controlMode = mode;
+
+    QString modeName = (mode == ControlMode::Vehicle) ? "车体运动" : "机械臂操控";
+    ui->label_mode_value->setText(modeName);
+    addCommand(QString("[模式切换] %1").arg(modeName));
+
+    // 同步通知键盘控制器
+    if (m_keyboardController) {
+        m_keyboardController->setControlMode(static_cast<int>(mode));
+    }
+
+    // 切换到机械臂模式时，发送零速度确保车体停止
+    if (mode == ControlMode::Arm) {
+        if (m_tcpClient && m_tcpClient->isConnected()) {
+            m_tcpClient->sendVelocityCommand(0.0f, 0.0f, 0.0f);
+        }
+    }
+}
+
+void MainWindow::handleGamepadVehicleMode(const ControllerState &state)
+{
     // 左摇杆Y轴 → 前后线速度 (linearX)
     // 右摇杆X轴 → 左右角速度 (angularZ)
-    // 死区阈值: 摇杆值 < 3000 视为零
     const int16_t DEADZONE = 3000;
-    const float MAX_LINEAR_SPEED = 0.5f;   // 最大线速度 m/s
-    const float MAX_ANGULAR_SPEED = 1.0f;  // 最大角速度 rad/s
+    const float MAX_LINEAR_SPEED = 0.5f;
+    const float MAX_ANGULAR_SPEED = 1.0f;
 
     float linearX = 0.0f;
     float angularZ = 0.0f;
 
-    // 左摇杆Y轴 → linearX (前后)
     if (qAbs(state.sThumbLY) > DEADZONE) {
         linearX = (state.sThumbLY / 32767.0f) * MAX_LINEAR_SPEED;
     }
-
-    // 右摇杆X轴 → angularZ (左右转)
     if (qAbs(state.sThumbRX) > DEADZONE) {
         angularZ = -(state.sThumbRX / 32767.0f) * MAX_ANGULAR_SPEED;
     }
@@ -938,7 +1080,7 @@ void MainWindow::onGamepadStateReceived(const ControllerState &state)
         return;
     }
 
-    // === 3. 发送速度命令 ===
+    // 发送速度命令
     if (m_tcpClient && m_tcpClient->isConnected()) {
         m_tcpClient->sendVelocityCommand(linearX, 0.0f, angularZ);
     }
@@ -956,8 +1098,75 @@ void MainWindow::onGamepadStateReceived(const ControllerState &state)
             if (linearX < 0) dir += "后退 ";
             if (angularZ > 0) dir += "左转 ";
             if (angularZ < 0) dir += "右转 ";
-            addCommand(QString("[手柄] %1 (lx=%.2f az=%.2f) 模式:%3")
-                       .arg(dir.trimmed()).arg(linearX).arg(angularZ).arg(state.modeIndex));
+            addCommand(QString("[手柄-车体] %1 (lx=%.2f az=%.2f)")
+                       .arg(dir.trimmed()).arg(linearX).arg(angularZ));
         }
+    }
+}
+
+void MainWindow::handleGamepadArmMode(const ControllerState &state)
+{
+    const int16_t DEADZONE = 3000;
+    const float JOINT_SPEED = 0.1f;
+
+    // A按钮 → 急停
+    if (state.buttonA) {
+        if (m_tcpClient && m_tcpClient->isConnected()) {
+            m_tcpClient->sendEmergencyStop();
+        }
+        addCommand("[手柄-机械臂] 急停!");
+        return;
+    }
+
+    if (!m_tcpClient || !m_tcpClient->isConnected()) return;
+
+    // 左摇杆X → 关节0（底座旋转）
+    if (qAbs(state.sThumbLX) > DEADZONE) {
+        float val = (state.sThumbLX / 32767.0f) * JOINT_SPEED;
+        m_tcpClient->sendJointControl(0, val, JOINT_SPEED);
+    }
+
+    // 左摇杆Y → 关节1（大臂俯仰）
+    if (qAbs(state.sThumbLY) > DEADZONE) {
+        float val = (state.sThumbLY / 32767.0f) * JOINT_SPEED;
+        m_tcpClient->sendJointControl(1, val, JOINT_SPEED);
+    }
+
+    // 右摇杆X → 关节2（小臂俯仰）
+    if (qAbs(state.sThumbRX) > DEADZONE) {
+        float val = (state.sThumbRX / 32767.0f) * JOINT_SPEED;
+        m_tcpClient->sendJointControl(2, val, JOINT_SPEED);
+    }
+
+    // 右摇杆Y → 关节3（手腕旋转）
+    if (qAbs(state.sThumbRY) > DEADZONE) {
+        float val = (state.sThumbRY / 32767.0f) * JOINT_SPEED;
+        m_tcpClient->sendJointControl(3, val, JOINT_SPEED);
+    }
+
+    // LT → 关节4（手腕俯仰）
+    if (state.bLeftTrigger > 30) {
+        float val = (state.bLeftTrigger / 255.0f) * JOINT_SPEED;
+        m_tcpClient->sendJointControl(4, val, JOINT_SPEED);
+    }
+
+    // RT → 关节5（末端旋转）
+    if (state.bRightTrigger > 30) {
+        float val = (state.bRightTrigger / 255.0f) * JOINT_SPEED;
+        m_tcpClient->sendJointControl(5, val, JOINT_SPEED);
+    }
+
+    // LB → 执行器闭合
+    if (state.leftShoulder) {
+        QJsonObject params;
+        params["value"] = -1.0;
+        m_tcpClient->sendSystemCommand("executor_control", params);
+    }
+
+    // RB → 执行器张开
+    if (state.rightShoulder) {
+        QJsonObject params;
+        params["value"] = 1.0;
+        m_tcpClient->sendSystemCommand("executor_control", params);
     }
 }
