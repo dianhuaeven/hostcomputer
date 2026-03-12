@@ -144,14 +144,14 @@
        <item>
         <widget class="QLabel" name="label_mode">
          <property name="text">
-          <string>电机模式:</string>
+          <string>控制模式:</string>
          </property>
         </widget>
        </item>
        <item>
         <widget class="QLabel" name="label_mode_value">
          <property name="text">
-          <string>待机</string>
+          <string>车体运动</string>
          </property>
         </widget>
        </item>
