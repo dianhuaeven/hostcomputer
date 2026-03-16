@@ -28,6 +28,8 @@ public:
     ~ROS1TcpClient();
 
     // 连接管理
+    // 返回值表示“是否成功发起连接尝试”，不表示已经建立连接。
+    // 连接成功/失败请以 connectedToROS / connectionError 信号为准。
     bool connectToROS(const QString &hostAddress, quint16 port = 9090);
     void disconnectFromROS();
     bool isConnected() const;

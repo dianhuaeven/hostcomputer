@@ -1273,15 +1273,15 @@ void MainWindow::showTcpConnectionDialog()
         }
 
         addCommand(QString("[TCP] 正在连接到 %1:%2 ...").arg(host).arg(port));
-        bool success = m_tcpClient->connectToROS(host, port);
-        if (success) {
-            // 连接成功，记住本次IP和端口
+        bool started = m_tcpClient->connectToROS(host, port);
+        if (started) {
+            // 已成功发起连接尝试；最终连接结果由 connectedToROS/connectionError 信号回调
             settings.setValue("tcp/host", host);
             settings.setValue("tcp/port", port);
         } else {
             auto *socket = m_tcpClient->getSocket();
             QString detail = socket ? socket->errorString() : "unknown";
-            addError(QString("[TCP] 连接失败: %1:%2 | 原因: %3").arg(host).arg(port).arg(detail));
+            addError(QString("[TCP] 发起连接失败: %1:%2 | 原因: %3").arg(host).arg(port).arg(detail));
         }
     }
 }

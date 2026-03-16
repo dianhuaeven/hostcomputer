@@ -54,6 +54,11 @@ void ROS1TcpClient::setupConnection()
     // 设置重连定时器
     m_reconnectTimer->setInterval(RECONNECT_INTERVAL_MS);
     connect(m_reconnectTimer, &QTimer::timeout, [this]() {
+        // 避免同一次连接尚未完成时重复计次，导致“提前耗尽重试次数”
+        if (m_socket->state() == QAbstractSocket::ConnectingState) {
+            return;
+        }
+
         if (m_autoReconnect && !m_isConnected && m_reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
             m_reconnectAttempts++;
             QString msg = QString("正在尝试重连... (%1/%2)").arg(m_reconnectAttempts).arg(MAX_RECONNECT_ATTEMPTS);
@@ -72,8 +77,13 @@ void ROS1TcpClient::setupConnection()
 
 bool ROS1TcpClient::connectToROS(const QString &hostAddress, quint16 port)
 {
-    if (m_isConnected || m_socket->state() == QAbstractSocket::ConnectingState) {
+    if (m_isConnected) {
         LOG_DEBUG(MODULE, "已经连接到ROS，无需重复连接");
+        return true;
+    }
+
+    if (m_socket->state() == QAbstractSocket::ConnectingState) {
+        LOG_DEBUG(MODULE, "正在连接ROS，忽略重复连接请求");
         return true;
     }
 
