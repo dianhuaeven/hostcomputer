@@ -17,7 +17,7 @@
    </size>
   </property>
   <property name="windowTitle">
-   <string>电机控制系统上位机</string>
+   <string>上位机v2</string>
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout_main">
@@ -187,11 +187,11 @@
            <height>30</height>
           </size>
          </property>
-         <property name="text">
-          <string>连接手柄</string>
-         </property>
          <property name="styleSheet">
           <string>QPushButton { padding: 2px 8px; }</string>
+         </property>
+         <property name="text">
+          <string>连接手柄</string>
          </property>
         </widget>
        </item>
@@ -225,7 +225,6 @@
          <property name="font">
           <font>
            <pointsize>14</pointsize>
-           <weight>75</weight>
            <bold>true</bold>
           </font>
          </property>
@@ -302,6 +301,12 @@ QPushButton:pressed {
           </property>
           <item>
            <widget class="QGroupBox" name="group_commands">
+            <property name="maximumSize">
+             <size>
+              <width>16777215</width>
+              <height>650</height>
+             </size>
+            </property>
             <property name="title">
              <string>下位机指令</string>
             </property>
@@ -355,6 +360,12 @@ QPushButton:pressed {
           </item>
           <item>
            <widget class="QGroupBox" name="group_errors">
+            <property name="maximumSize">
+             <size>
+              <width>16777215</width>
+              <height>650</height>
+             </size>
+            </property>
             <property name="title">
              <string>系统消息</string>
             </property>
@@ -430,27 +441,13 @@ QPushButton:pressed {
     <addaction name="separator"/>
     <addaction name="action_exit"/>
    </widget>
-   <widget class="QMenu" name="menu_view">
-    <property name="title">
-     <string>视图</string>
-    </property>
-    <addaction name="action_fullscreen"/>
-    <addaction name="action_reset_layout"/>
-   </widget>
-   <widget class="QMenu" name="menu_control">
-    <property name="title">
-     <string>控制</string>
-    </property>
-    <addaction name="action_keyboard_control"/>
-   </widget>
    <addaction name="menu_file"/>
-   <addaction name="menu_view"/>
-   <addaction name="menu_control"/>
+   <addaction name="action_reset_layout"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
   <action name="action_connect">
    <property name="text">
-    <string>连接设备</string>
+    <string>连接设备 (Ctrl+C)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+C</string>
@@ -458,7 +455,7 @@ QPushButton:pressed {
   </action>
   <action name="action_disconnect">
    <property name="text">
-    <string>断开连接</string>
+    <string>断开连接 (Ctrl+D)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+D</string>
@@ -466,26 +463,21 @@ QPushButton:pressed {
   </action>
   <action name="action_exit">
    <property name="text">
-    <string>退出</string>
+    <string>退出 (Ctrl+Q)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+Q</string>
    </property>
   </action>
-  <action name="action_fullscreen">
-   <property name="text">
-    <string>全屏</string>
-   </property>
-   <property name="shortcut">
-    <string>F11</string>
-   </property>
-  </action>
   <action name="action_reset_layout">
    <property name="text">
-    <string>刷新</string>
+    <string>刷新 (F5)</string>
    </property>
    <property name="toolTip">
     <string>刷新</string>
+   </property>
+   <property name="shortcut">
+    <string>F5</string>
    </property>
   </action>
   <action name="action_about">
@@ -495,24 +487,10 @@ QPushButton:pressed {
   </action>
   <action name="action_tcp_connect">
    <property name="text">
-    <string>TCP连接(ROS)</string>
+    <string>TCP连接(ROS) (Ctrl+T)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+T</string>
-   </property>
-  </action>
-  <action name="action_keyboard_control">
-   <property name="text">
-    <string>键盘控制</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+K</string>
-   </property>
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-   <property name="checked">
-    <bool>true</bool>
    </property>
   </action>
  </widget>

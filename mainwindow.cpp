@@ -1,10 +1,9 @@
 #include "mainwindow.h"
 #include "./ui_mainwindow.h"
-#include "src/communication/SharedStructs.h"  // 先包含Communication命名空间
-#include "src/communication/serialportmanager.h"
-#include "src/communication/ROS1TcpClient.h"
-
-#include "src/parser/ProtocolParser.h"
+#include "src/communication/SharedStructs.h"
+#include "src/controller/RobotViewModel.h"
+#include <QQuickWidget>
+#include <QQmlContext>
 #include <QtGlobal>
 #include <QSpinBox>
 
@@ -25,8 +24,6 @@
 #include <QApplication>
 #include <QShortcut>
 #include <QKeySequence>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QSettings>
 #include <QNetworkInterface>
 #include <QFrame>
@@ -39,8 +36,7 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
-    , m_serialManager(nullptr)
-    , m_tcpClient(nullptr)
+    , m_controller(nullptr)
     , m_keyboardController(nullptr)
     , m_displayLayout(nullptr)
     , m_co2Widget(nullptr)
@@ -50,17 +46,12 @@ MainWindow::MainWindow(QWidget *parent)
     ui->setupUi(this);
 
     // 设置窗口属性
-    setWindowTitle("电机控制系统上位机 v1.0");
+    setWindowTitle("上位机v2");
     resize(1920, 1080);
     setMinimumSize(1600, 900);
 
-    // 设置布局到 CarWidget 上
-    // 将 模型 类的 UI 添加到布局中
-
     // 初始化组件
-    setupSerialPort();
-    setupParser();
-    setupTcpClient();
+    setupController();
     setupDisplayLayout();
     setupKeyboardController();
     setupHandleKey();
@@ -99,28 +90,41 @@ MainWindow::~MainWindow()
     if (m_statusTimer) {
         m_statusTimer->stop();
     }
-    if (m_tcpClient) {
-        m_tcpClient->disconnectFromROS();
+    if (m_controller) {
+        m_controller->stop();
     }
     delete ui;
 }
 
-void MainWindow::setupSerialPort()
+void MainWindow::setupController()
 {
-    // 创建串口管理器
-    m_serialManager = new Communication::SerialPortManager(this);
+    m_controller = new Controller(this);
+    m_controller->initialize();
+    m_controller->start();
 
-    // 连接串口数据接收信号（用于调试和日志）
-    connect(m_serialManager, &Communication::SerialPortManager::dataReceived,
-            this, &MainWindow::onSerialDataReceived);
+    // 连接Controller信号到UI更新
 
-    // 连接解析后的ESP32状态数据信号
-    connect(m_serialManager, &Communication::SerialPortManager::esp32StateReceived,
-            this, &MainWindow::onEsp32StateReceived);
+    // 串口状态
+    connect(m_controller, &Controller::serialConnected, this, &MainWindow::onSerialConnected);
+    connect(m_controller, &Controller::serialDisconnected, this, &MainWindow::onSerialDisconnected);
+    connect(m_controller, &Controller::serialError, this, &MainWindow::onSerialError);
 
-    // 连接连接状态变化信号
-    connect(m_serialManager, &Communication::SerialPortManager::connectionStatusChanged,
-            this, &MainWindow::updateConnectionStatus);
+    // TCP状态
+    connect(m_controller, &Controller::tcpConnected, this, &MainWindow::onTcpConnected);
+    connect(m_controller, &Controller::tcpDisconnected, this, &MainWindow::onTcpDisconnected);
+    connect(m_controller, &Controller::tcpError, this, &MainWindow::onTcpError);
+    connect(m_controller, &Controller::tcpHeartbeatChanged, this, &MainWindow::onTcpHeartbeatChanged);
+
+    // 数据接收
+    connect(m_controller, &Controller::esp32StateReceived, this, &MainWindow::onEsp32StateReceived);
+    connect(m_controller, &Controller::co2DataReceived, this, &MainWindow::onCO2DataReceived);
+    connect(m_controller, &Controller::imuDataReceived, this, &MainWindow::onIMUDataReceived);
+    connect(m_controller, &Controller::cameraInfoReceived, this, &MainWindow::onCameraInfoReceived);
+
+    // 系统错误
+    connect(m_controller, &Controller::systemError, this, [this](const QString &error) {
+        addError(error);
+    });
 }
 
 void MainWindow::setupDisplayLayout()
@@ -167,62 +171,27 @@ void MainWindow::setupDisplayLayout()
 
     // 把 DisplayLayoutManager 塞进 group_cameras 的布局中
     ui->group_cameras->layout()->addWidget(m_displayLayout);
-}
 
-void MainWindow::setupParser()
-{
-    // 协议解析已经移到SerialPortManager中处理
-}
+    // 初始化3D机器人姿态视图，嵌入到 CarWidget
+    m_robotViewModel = new RobotViewModel(this);
 
-void MainWindow::setupTcpClient()
-{
-    m_tcpClient = new Communication::ROS1TcpClient(this);
+    m_robotView = new QQuickWidget(ui->CarWidget);
+    m_robotView->rootContext()->setContextProperty("robotViewModel", m_robotViewModel);
+    m_robotView->setSource(QUrl("qrc:/resources/qml/RobotView.qml"));
+    m_robotView->setResizeMode(QQuickWidget::SizeRootObjectToView);
 
-    // 连接TCP状态信号
-    connect(m_tcpClient, &Communication::ROS1TcpClient::connectedToROS, this, [this]() {
-        updateConnectionStatus(true);
-        addCommand("[TCP] 已连接到ROS节点");
-        statusBar()->showMessage(QString("TCP已连接: %1:%2")
-            .arg(m_tcpClient->getROSHost()).arg(m_tcpClient->getROSPort()));
-    });
-
-    connect(m_tcpClient, &Communication::ROS1TcpClient::disconnectedFromROS, this, [this]() {
-        updateConnectionStatus(false);
-        addCommand("[TCP] 与ROS节点断开连接");
-        statusBar()->showMessage("TCP连接断开");
-    });
-
-    connect(m_tcpClient, &Communication::ROS1TcpClient::connectionError, this, [this](const QString &error) {
-        addError(QString("[TCP] %1").arg(error));
-    });
-
-    // 连接数据接收信号
-    connect(m_tcpClient, &Communication::ROS1TcpClient::motorStateReceived,
-            this, &MainWindow::onEsp32StateReceived);
-
-    connect(m_tcpClient, &Communication::ROS1TcpClient::systemStatusReceived, this, [this](const QJsonObject &status) {
-        addCommand(QString("[TCP] 收到系统状态: %1").arg(
-            QString(QJsonDocument(status).toJson(QJsonDocument::Compact))));
-    });
-
-    // CO2数据接收
-    connect(m_tcpClient, &Communication::ROS1TcpClient::co2DataReceived,
-            this, &MainWindow::onCO2DataReceived);
-
-    // IMU数据接收
-    connect(m_tcpClient, &Communication::ROS1TcpClient::imuDataReceived,
-            this, &MainWindow::onIMUDataReceived);
-
-    // 摄像头信息接收 → RTSP播放控件
-    connect(m_tcpClient, &Communication::ROS1TcpClient::cameraInfoReceived,
-            this, [this](int cameraId, const QString &rtspUrl, bool online,
-                         const QString &codec, int width, int height, int fps, int bitrateKbps) {
-        if (cameraId >= 0 && cameraId < 5 && m_rtspWidgets[cameraId]) {
-            m_rtspWidgets[cameraId]->setCameraInfo(rtspUrl, online, codec, width, height, fps, bitrateKbps);
-            addCommand(QString("[TCP] 摄像头%1 %2 %3")
-                       .arg(cameraId).arg(online ? "上线" : "离线").arg(rtspUrl));
+    // 打印加载错误
+    connect(m_robotView, &QQuickWidget::statusChanged, this, [this](QQuickWidget::Status status) {
+        if (status == QQuickWidget::Error) {
+            for (const auto &err : m_robotView->errors())
+                qWarning() << "[RobotView]" << err.toString();
         }
     });
+
+    QVBoxLayout *carLayout = new QVBoxLayout(ui->CarWidget);
+    carLayout->setContentsMargins(0, 0, 0, 0);
+    carLayout->addWidget(m_robotView);
+    ui->CarWidget->setLayout(carLayout);
 }
 
 void MainWindow::setupKeyboardController()
@@ -254,8 +223,8 @@ void MainWindow::setupKeyboardController()
             }
         }
 
-        if (m_tcpClient && m_tcpClient->isConnected()) {
-            m_tcpClient->sendVelocityCommand(lx, ly, az);
+        if (m_controller && m_controller->isTcpConnected()) {
+            m_controller->sendVelocityCommand(lx, ly, az);
         }
     });
     connect(m_keyboardController, &KeyboardController::emergencyStopRequested,
@@ -264,18 +233,18 @@ void MainWindow::setupKeyboardController()
     // 键盘机械臂模式信号
     connect(m_keyboardController, &KeyboardController::jointControlRequested,
             this, [this](int jointId, float position, float velocity) {
-        if (m_tcpClient && m_tcpClient->isConnected()) {
-            m_tcpClient->sendJointControl(jointId, position, velocity);
+        if (m_controller && m_controller->isTcpConnected()) {
+            m_controller->sendJointControl(jointId, position, velocity);
             addCommand(QString("[键盘-机械臂] 关节%1 位置:%2 速度:%3")
                        .arg(jointId).arg(position, 0, 'f', 3).arg(velocity, 0, 'f', 3));
         }
     });
     connect(m_keyboardController, &KeyboardController::executorControlRequested,
             this, [this](float value) {
-        if (m_tcpClient && m_tcpClient->isConnected()) {
+        if (m_controller && m_controller->isTcpConnected()) {
             QJsonObject params;
             params["value"] = value;
-            m_tcpClient->sendSystemCommand("executor_control", params);
+            m_controller->sendSystemCommand("executor_control", params);
             addCommand(QString("[键盘-机械臂] 执行器: %1").arg(value > 0 ? "张开" : "闭合"));
         }
     });
@@ -362,13 +331,13 @@ void MainWindow::updateFPS(int fps)
 
 void MainWindow::updateBandwidthAndPacketLoss()
 {
-    if (!m_tcpClient) {
+    if (!m_controller || !m_controller->isTcpConnected()) {
         ui->label_cpu->setText("带宽压力:");
         ui->label_cpu_value->setText("N/A");
         return;
     }
 
-    auto stats = m_tcpClient->getStats();
+    auto stats = m_controller->getTcpStatistics();
 
     // 计算带宽压力（本周期收发字节数，定时器间隔见调用频率）
     quint64 deltaBytes = (stats.bytesSent - m_lastBytesSent) + (stats.bytesReceived - m_lastBytesReceived);
@@ -431,11 +400,22 @@ void MainWindow::updateCarAttitude(double roll, double pitch, double yaw)
     m_pitch = pitch;
     m_yaw = yaw;
 
-
+    if (m_robotViewModel)
+        m_robotViewModel->updateAttitude(roll, pitch, yaw);
 }
 
 void MainWindow::updateJointsData(const Communication::ESP32State& esp32State)
 {
+    // 更新3D视图腿部角度（关节0-3对应4条腿，位置值直接作为角度度数）
+    if (m_robotViewModel) {
+        m_robotViewModel->updateLegs(
+            esp32State.joints[0].position / 10.0,
+            esp32State.joints[1].position / 10.0,
+            esp32State.joints[2].position / 10.0,
+            esp32State.joints[3].position / 10.0
+        );
+    }
+
     // 清空text_errors控件
     ui->text_errors->clear();
 
@@ -531,14 +511,14 @@ void MainWindow::on_action_tcp_connect_triggered()
 
 void MainWindow::on_action_disconnect_triggered()
 {
-    if (m_serialManager && m_serialManager->isOpen()) {
-        m_serialManager->closePort();
+    if (m_controller && m_controller->isSerialConnected()) {
+        m_controller->disconnectSerialPort();
         updateConnectionStatus(false);
         addCommand("[操作] 串口连接已断开");
     }
 
-    if (m_tcpClient && m_tcpClient->isConnected()) {
-        m_tcpClient->disconnectFromROS();
+    if (m_controller && m_controller->isTcpConnected()) {
+        m_controller->disconnectFromROS();
         addCommand("[操作] TCP连接已断开");
     }
 }
@@ -548,18 +528,30 @@ void MainWindow::on_action_exit_triggered()
     close();
 }
 
-void MainWindow::on_action_fullscreen_triggered()
-{
-    if (isFullScreen()) {
-        showNormal();
-    } else {
-        showFullScreen();
-    }
-}
-
 void MainWindow::on_action_reset_layout_triggered()
 {
-    reinitialize();
+    // 姿态归零
+    m_roll = 0.0;
+    m_pitch = 0.0;
+    m_yaw = 0.0;
+    if (m_robotViewModel) {
+        m_robotViewModel->updateAttitude(0.0, 0.0, 0.0);
+        m_robotViewModel->updateLegs(0.0, 0.0, 0.0, 0.0);
+    }
+
+    // 刷新所有UI显示（基于当前实际状态）
+    updateConnectionDisplay();
+    updateHeartbeatDisplay();
+    updateGamepadDisplay();
+    updateBandwidthAndPacketLoss();
+
+    ui->label_fps_value->setText(QString::number(m_currentFPS) + " FPS");
+    ui->label_mode_value->setText(m_controlMode == ControlMode::Vehicle ? "车体运动" : "机械臂操控");
+    ui->label_error_count->setText(QString("错误: %1").arg(m_errorCount));
+
+    update();
+
+    addCommand("[系统] 视图已刷新，姿态已归零");
 }
 
 void MainWindow::cleanupResources()
@@ -582,21 +574,13 @@ void MainWindow::cleanupResources()
         m_keyboardController->disconnect();
     }
 
-    // 4. 停止并断开串口
-    if (m_serialManager) {
-        if (m_serialManager->isOpen()) {
-            m_serialManager->closePort();
-        }
-        m_serialManager->disconnect();
+    // 4. 停止Controller（会自动断开串口和TCP）
+    if (m_controller) {
+        m_controller->stop();
+        m_controller->disconnect();
     }
 
-    // 5. 断开TCP
-    if (m_tcpClient) {
-        m_tcpClient->disconnectFromROS();
-        m_tcpClient->disconnect();
-    }
-
-    // 6. 清空命令和错误显示
+    // 5. 清空命令和错误显示
     if (ui->text_commands) {
         ui->text_commands->clear();
     }
@@ -604,105 +588,15 @@ void MainWindow::cleanupResources()
         ui->text_errors->clear();
     }
 
-    // 7. 处理待处理的事件，确保UI刷新
+    // 6. 处理待处理的事件，确保UI刷新
     QApplication::processEvents();
-}
-
-void MainWindow::reinitialize()
-{
-    // 1. 清理现有资源（停止所有活动）
-    cleanupResources();
-
-    // 2. 删除所有组件
-    delete m_statusTimer;
-    m_statusTimer = nullptr;
-
-    delete m_handleKey;
-    m_handleKey = nullptr;
-
-    delete m_keyboardController;
-    m_keyboardController = nullptr;
-
-    delete m_serialManager;
-    m_serialManager = nullptr;
-
-    delete m_tcpClient;
-    m_tcpClient = nullptr;
-
-    if (m_displayLayout) {
-        delete m_displayLayout;
-        m_displayLayout = nullptr;
-        m_co2Widget = nullptr;  // CO2控件随布局一起销毁
-        for (auto &w : m_rtspWidgets) w = nullptr;  // RTSP控件随布局一起销毁
-    }
-
-    if (m_gamepadWidget) {
-        delete m_gamepadWidget;
-        m_gamepadWidget = nullptr;
-    }
-
-    // 3. 重置所有状态变量
-    m_isConnected = false;
-    m_heartbeatOnline = false;
-    m_currentFPS = 0;
-    m_lastBytesSent = 0;
-    m_lastBytesReceived = 0;
-    m_lastMessagesSent = 0;
-    m_lastMessagesReceived = 0;
-    m_motorMode = "待机";
-    m_errorCount = 0;
-    m_controlMode = ControlMode::Vehicle;
-    m_roll = 0.0;
-    m_pitch = 0.0;
-    m_yaw = 0.0;
-
-    // 4. 处理待处理的事件
-    QApplication::processEvents();
-
-    // 5. 重新初始化所有组件（与构造函数顺序一致）
-    setupSerialPort();
-    setupParser();
-    setupTcpClient();
-    setupDisplayLayout();
-    setupKeyboardController();
-    setupHandleKey();
-    setupTimers();
-
-    // 6. 重新更新UI状态
-    updateConnectionDisplay();
-    updateHeartbeatDisplay();
-    updateGamepadDisplay();
-    ui->label_fps_value->setText("0 FPS");
-    ui->label_cpu_value->setText("0%");
-    ui->label_mode_value->setText("车体运动");
-    ui->label_error_count->setText("错误: 0");
-
-    // 7. 添加提示信息
-    addCommand("[系统] 界面重置完成");
-    addCommand("[系统] 所有组件已重新初始化");
 }
 
 void MainWindow::on_action_about_triggered()
 {
     QMessageBox::about(this, "关于",
-        "电机控制系统上位机 v1.0\n\n"
-        "基于Qt6开发的电机控制和监控系统\n"
-        "支持多相机显示、姿态监控、指令管理等功能\n\n"
-        "开发团队: AI Assistant\n"
-        "技术支持: Qt6.8 + CMake");
-}
-
-void MainWindow::on_action_keyboard_control_toggled(bool checked)
-{
-    m_keyboardController->setEnabled(checked);
-
-    if (checked) {
-        addCommand("[键盘] 键盘控制已启用 (W前进 S后退 A左转 D右转 Space急停)");
-        statusBar()->showMessage("键盘控制: 开启");
-    } else {
-        addCommand("[键盘] 键盘控制已禁用");
-        statusBar()->showMessage("键盘控制: 关闭");
-    }
+        "上位机 v2\n\n"
+        );
 }
 
 void MainWindow::on_btn_clear_commands_clicked()
@@ -725,9 +619,9 @@ void MainWindow::on_btn_emergency_stop_clicked()
     addCommand("[急停] ⚠️ 用户触发急停按钮!");
 
     // 1. 立即停止所有运动（TCP通道）
-    if (m_tcpClient && m_tcpClient->isConnected()) {
-        m_tcpClient->sendEmergencyStop();
-        m_tcpClient->sendVelocityCommand(0.0f, 0.0f, 0.0f);
+    if (m_controller && m_controller->isTcpConnected()) {
+        m_controller->sendEmergencyStop();
+        m_controller->sendVelocityCommand(0.0f, 0.0f, 0.0f);
         addCommand("[急停] TCP急停指令已发送");
     }
 
@@ -878,33 +772,6 @@ QString MainWindow::getCurrentTimestamp() const
     return QDateTime::currentDateTime().toString("hh:mm:ss");
 }
 
-QStringList MainWindow::getAvailableSerialPorts()
-{
-    if (!m_serialManager) {
-        return QStringList();
-    }
-    return m_serialManager->getAvailablePorts();
-}
-
-bool MainWindow::connectToSerialPort(const QString& portName, int baudRate)
-{
-    if (!m_serialManager) {
-        addError("[错误] 串口管理器未初始化");
-        return false;
-    }
-
-    bool success = m_serialManager->openPort(portName, baudRate);
-
-    if (success) {
-        updateConnectionStatus(true);
-        addCommand(QString("[串口] 成功连接 %1, 波特率: %2").arg(portName).arg(baudRate));
-    } else {
-        addError(QString("[错误] 串口连接失败 %1, 波特率: %2").arg(portName).arg(baudRate));
-    }
-
-    return success;
-}
-
 void MainWindow::showSerialPortSelection()
 {
     // 创建自定义对话框
@@ -948,7 +815,7 @@ void MainWindow::showSerialPortSelection()
 
     // 刷新串口列表的函数
     auto refreshPorts = [&]() {
-        QStringList availablePorts = getAvailableSerialPorts();
+        QStringList availablePorts = m_controller ? m_controller->getAvailableSerialPorts() : QStringList();
         portCombo->clear();
         portCombo->addItems(availablePorts);
 
@@ -986,39 +853,31 @@ void MainWindow::showSerialPortSelection()
         int selectedBaudRate = baudCombo->currentText().toInt();
 
         if (!selectedPort.isEmpty()) {
-            // 连接选中的串口
-            connectToSerialPort(selectedPort, selectedBaudRate);
+            // 通过Controller连接串口
+            bool success = m_controller ? m_controller->connectSerialPort(selectedPort, selectedBaudRate) : false;
+            if (success) {
+                updateConnectionStatus(true);
+                addCommand(QString("[串口] 成功连接 %1, 波特率: %2").arg(selectedPort).arg(selectedBaudRate));
+            } else {
+                addError(QString("[错误] 串口连接失败 %1, 波特率: %2").arg(selectedPort).arg(selectedBaudRate));
+            }
         }
     }
 }
 
-void MainWindow::refreshSerialPorts()
-{
-    QStringList availablePorts = getAvailableSerialPorts();
-
-    if (availablePorts.isEmpty()) {
-        addCommand("[快捷键F5] 串口刷新完成 - 未发现可用串口");
-        statusBar()->showMessage("未发现可用串口设备", 3000);
-    } else {
-        addCommand(QString("[快捷键F5] 串口刷新完成 - 发现 %1 个可用串口: %2")
-                   .arg(availablePorts.size())
-                   .arg(availablePorts.join(", ")));
-        statusBar()->showMessage(QString("发现 %1 个可用串口").arg(availablePorts.size()), 3000);
-    }
-}
 
 void MainWindow::showTcpConnectionDialog()
 {
     // 如果已连接，先确认是否断开
-    if (m_tcpClient && m_tcpClient->isConnected()) {
+    if (m_controller && m_controller->isTcpConnected()) {
         auto reply = QMessageBox::question(this, "TCP连接",
             QString("当前已连接到 %1:%2\n是否断开并重新连接？")
-                .arg(m_tcpClient->getROSHost()).arg(m_tcpClient->getROSPort()),
+                .arg(m_controller->getROSHost()).arg(m_controller->getROSPort()),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (reply == QMessageBox::No) {
             return;
         }
-        m_tcpClient->disconnectFromROS();
+        m_controller->disconnectFromROS();
     }
 
     QDialog dialog(this);
@@ -1069,7 +928,7 @@ void MainWindow::showTcpConnectionDialog()
     layout->addWidget(networkStatusLabel);
 
     QPushButton* autoConfigBtn = new QPushButton("自动配置网络");
-    autoConfigBtn->setToolTip("将有线网卡IP配置为 192.168.1.100，子网 255.255.255.0");
+    autoConfigBtn->setToolTip("根据目标NUC的IP，自动为本机网卡分配同网段的不冲突IP");
     autoConfigBtn->setEnabled(false);
     layout->addWidget(autoConfigBtn);
 
@@ -1130,6 +989,27 @@ void MainWindow::showTcpConnectionDialog()
         }
     };
 
+    // --- 根据目标NUC IP计算本机同网段不冲突IP ---
+    auto calcLocalIp = [](const QString &nucIp) -> QString {
+        QStringList parts = nucIp.split('.');
+        if (parts.size() != 4) return QString();
+        int lastOctet = parts[3].toInt();
+        // 从200开始找一个不冲突的末位
+        for (int candidate : {200, 201, 202, 210, 220, 250}) {
+            if (candidate != lastOctet) {
+                return QString("%1.%2.%3.%4").arg(parts[0], parts[1], parts[2]).arg(candidate);
+            }
+        }
+        return QString();
+    };
+
+    // --- 根据目标IP提取网段前缀（如 "192.168.1."）---
+    auto getSubnetPrefix = [](const QString &ip) -> QString {
+        QStringList parts = ip.split('.');
+        if (parts.size() != 4) return QString();
+        return QString("%1.%2.%3.").arg(parts[0], parts[1], parts[2]);
+    };
+
     // --- 刷新网卡状态的 lambda ---
     auto refreshNetworkStatus = [&](const EthernetInfo &info) {
         if (!info.found) {
@@ -1139,7 +1019,14 @@ void MainWindow::showTcpConnectionDialog()
             return;
         }
 
-        bool isReady = info.currentIp.startsWith("192.168.1.");
+        QString nucIp = ipEdit->text().trimmed();
+        QString subnetPrefix = getSubnetPrefix(nucIp);
+
+        // 判断本机IP是否已在目标NUC同网段，且不与NUC冲突
+        bool isReady = !subnetPrefix.isEmpty()
+                       && info.currentIp.startsWith(subnetPrefix)
+                       && info.currentIp != nucIp;
+
         QString statusText = QString("有线网卡: %1").arg(info.adapterName);
         if (info.currentIp.isEmpty()) {
             statusText += " (未分配IP)";
@@ -1166,19 +1053,31 @@ void MainWindow::showTcpConnectionDialog()
     detectEthernetAdapter(ethInfo);
     refreshNetworkStatus(ethInfo);
 
-    // 如果检测到已就绪的IP，自动填入IP输入框
-    if (ethInfo.found && ethInfo.currentIp.startsWith("192.168.1.")) {
-        // 目标NUC地址保持 192.168.1.100 不变（这是下位机的IP，不是本机IP）
-    }
+    // IP输入框变化时重新刷新网卡就绪状态
+    connect(ipEdit, &QLineEdit::textChanged, &dialog, [&]() {
+        refreshNetworkStatus(ethInfo);
+    });
 
     // --- 自动配置按钮点击逻辑 ---
     connect(autoConfigBtn, &QPushButton::clicked, &dialog, [&]() {
+        QString nucIp = ipEdit->text().trimmed();
+        QString localIp = calcLocalIp(nucIp);
+
+        if (localIp.isEmpty()) {
+            QMessageBox::warning(&dialog, "配置失败",
+                "请先在上方填入有效的NUC IP地址（如 192.168.1.50）");
+            return;
+        }
+
+        QString subnetMask = "255.255.255.0";
+
         auto confirmReply = QMessageBox::question(&dialog, "确认网络配置",
             QString("将对网卡 \"%1\" 执行以下配置:\n\n"
-                    "  IP地址: 192.168.1.100\n"
-                    "  子网掩码: 255.255.255.0\n\n"
+                    "  本机IP: %2\n"
+                    "  子网掩码: %3\n"
+                    "  目标NUC: %4\n\n"
                     "此操作需要管理员权限（UAC弹窗），是否继续？")
-                .arg(ethInfo.adapterName),
+                .arg(ethInfo.adapterName, localIp, subnetMask, nucIp),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
 
         if (confirmReply != QMessageBox::Yes) {
@@ -1187,8 +1086,8 @@ void MainWindow::showTcpConnectionDialog()
 
 #ifdef Q_OS_WIN
         // 构建 netsh 命令参数
-        QString netshArgs = QString("interface ip set address name=\"%1\" static 192.168.1.100 255.255.255.0")
-                                .arg(ethInfo.adapterName);
+        QString netshArgs = QString("interface ip set address name=\"%1\" static %2 %3")
+                                .arg(ethInfo.adapterName, localIp, subnetMask);
 
         // 使用 ShellExecuteExW 提权执行
         SHELLEXECUTEINFOW sei = {};
@@ -1221,13 +1120,13 @@ void MainWindow::showTcpConnectionDialog()
             detectEthernetAdapter(ethInfo);
             refreshNetworkStatus(ethInfo);
 
-            if (ethInfo.currentIp == "192.168.1.100") {
+            if (ethInfo.currentIp == localIp) {
                 QMessageBox::information(&dialog, "配置成功",
                     QString("网卡 \"%1\" 已成功配置为:\n"
-                            "IP: 192.168.1.100\n"
-                            "子网掩码: 255.255.255.0")
-                        .arg(ethInfo.adapterName));
-                addCommand("[网络] 有线网卡已配置为 192.168.1.100");
+                            "IP: %2\n"
+                            "子网掩码: %3")
+                        .arg(ethInfo.adapterName, localIp, subnetMask));
+                addCommand(QString("[网络] 有线网卡已配置为 %1").arg(localIp));
             } else {
                 // 可能IP变了但不是精确匹配，再刷新看看
                 QMessageBox::warning(&dialog, "配置结果",
@@ -1273,50 +1172,63 @@ void MainWindow::showTcpConnectionDialog()
         }
 
         addCommand(QString("[TCP] 正在连接到 %1:%2 ...").arg(host).arg(port));
-        bool started = m_tcpClient->connectToROS(host, port);
+        bool started = m_controller ? m_controller->connectToROS(host, port) : false;
         if (started) {
-            // 已成功发起连接尝试；最终连接结果由 connectedToROS/connectionError 信号回调
+            // 已成功发起连接尝试；最终连接结果由信号回调
             settings.setValue("tcp/host", host);
             settings.setValue("tcp/port", port);
         } else {
-            auto *socket = m_tcpClient->getSocket();
-            QString detail = socket ? socket->errorString() : "unknown";
-            addError(QString("[TCP] 发起连接失败: %1:%2 | 原因: %3").arg(host).arg(port).arg(detail));
+            addError(QString("[TCP] 发起连接失败: %1:%2").arg(host).arg(port));
         }
     }
 }
 
-void MainWindow::onSerialDataReceived(const QByteArray &data)
+
+// ==================== Controller信号处理 ====================
+
+void MainWindow::onSerialConnected()
 {
-    // 显示原始USB-CDC数据（用于调试帧头问题）
-    qDebug() << "[USB-CDC] 收到数据，长度:" << data.size()
-             << "内容:" << data.toHex(' ');
+    updateConnectionStatus(true);
+    addCommand("[串口] 设备已连接");
+}
 
-    // 在命令窗口显示接收到的数据
-    addCommand(QString("[串口] 收到���据 长度:%1 内容:%2")
-               .arg(data.size())
-               .arg(data.toHex(' ')));
+void MainWindow::onSerialDisconnected()
+{
+    updateConnectionStatus(false);
+    addCommand("[串口] 设备已断开");
+}
 
-    // 检查是否包含帧头 0xAA
-    if (data.contains(0xAA)) {
-        addCommand("[串口] ✓ 检测到帧头 0xAA");
-    } else {
-        addCommand("[串口] ✗ 未检测到帧头 0xAA");
+void MainWindow::onSerialError(const QString &error)
+{
+    addError(QString("[串口] %1").arg(error));
+}
 
-        // 显示每个字节的十进制值
-        QString byteStr = "[串口] 字节值: ";
-        for (int i = 0; i < data.size(); ++i) {
-            byteStr += QString("%1 ").arg(static_cast<uint8_t>(data[i]));
-        }
-        addCommand(byteStr);
+void MainWindow::onTcpConnected()
+{
+    updateConnectionStatus(true);
+    addCommand("[TCP] 已连接到ROS节点");
+    if (m_controller) {
+        statusBar()->showMessage(QString("TCP已连接: %1:%2")
+            .arg(m_controller->getROSHost()).arg(m_controller->getROSPort()));
     }
 }
 
-void MainWindow::onCompleteFrameReceived(const QByteArray &frame)
+void MainWindow::onTcpDisconnected()
 {
-    // 注意：实际的协议解析已经移到 SerialPortManager 中
-    // 解析后的数据会通过 onEsp32StateReceived 槽函数接收
-    Q_UNUSED(frame)
+    updateConnectionStatus(false);
+    addCommand("[TCP] 与ROS节点断开连接");
+    statusBar()->showMessage("TCP连接断开");
+    updateCarAttitude(0.0, 0.0, 0.0);
+}
+
+void MainWindow::onTcpError(const QString &error)
+{
+    addError(QString("[TCP] %1").arg(error));
+}
+
+void MainWindow::onTcpHeartbeatChanged(bool online)
+{
+    updateHeartbeatStatus(online);
 }
 
 void MainWindow::onEsp32StateReceived(const Communication::ESP32State &state)
@@ -1339,6 +1251,17 @@ void MainWindow::onIMUDataReceived(float roll, float pitch, float yaw,
     Q_UNUSED(accelY)
     Q_UNUSED(accelZ)
     updateCarAttitude(roll, pitch, yaw);
+}
+
+void MainWindow::onCameraInfoReceived(int cameraId, bool online, const QString &codec,
+                                      int width, int height, int fps, int bitrate,
+                                      const QString &rtspUrl)
+{
+    if (cameraId >= 0 && cameraId < 5 && m_rtspWidgets[cameraId]) {
+        m_rtspWidgets[cameraId]->setCameraInfo(rtspUrl, online, codec, width, height, fps, bitrate);
+        addCommand(QString("[TCP] 摄像头%1 %2 %3")
+                   .arg(cameraId).arg(online ? "上线" : "离线").arg(rtspUrl));
+    }
 }
 
 void MainWindow::onGamepadStateReceived(const ControllerState &state)
@@ -1405,8 +1328,8 @@ void MainWindow::switchControlMode(ControlMode mode)
 
     // 切换到机械臂模式时，发送零速度确保车体停止
     if (mode == ControlMode::Arm) {
-        if (m_tcpClient && m_tcpClient->isConnected()) {
-            m_tcpClient->sendVelocityCommand(0.0f, 0.0f, 0.0f);
+        if (m_controller && m_controller->isTcpConnected()) {
+            m_controller->sendVelocityCommand(0.0f, 0.0f, 0.0f);
         }
     }
 }
@@ -1433,16 +1356,16 @@ void MainWindow::handleGamepadVehicleMode(const ControllerState &state)
     if (state.buttonA) {
         linearX = 0.0f;
         angularZ = 0.0f;
-        if (m_tcpClient && m_tcpClient->isConnected()) {
-            m_tcpClient->sendEmergencyStop();
+        if (m_controller && m_controller->isTcpConnected()) {
+            m_controller->sendEmergencyStop();
         }
         addCommand("[手柄] 急停!");
         return;
     }
 
     // 发送速度命令
-    if (m_tcpClient && m_tcpClient->isConnected()) {
-        m_tcpClient->sendVelocityCommand(linearX, 0.0f, angularZ);
+    if (m_controller && m_controller->isTcpConnected()) {
+        m_controller->sendVelocityCommand(linearX, 0.0f, angularZ);
     }
 
     // 方向变化日志（500ms节流防止刷屏）
@@ -1477,8 +1400,8 @@ void MainWindow::handleGamepadArmMode(const ControllerState &state)
 
     // A按钮 → 急停
     if (state.buttonA) {
-        if (m_tcpClient && m_tcpClient->isConnected()) {
-            m_tcpClient->sendEmergencyStop();
+        if (m_controller && m_controller->isTcpConnected()) {
+            m_controller->sendEmergencyStop();
         }
         addCommand("[手柄-机械臂] 急停!");
         return;
@@ -1537,8 +1460,8 @@ void MainWindow::handleGamepadArmMode(const ControllerState &state)
                         qAbs(deltaRoll) > 0.001f || qAbs(deltaPitch) > 0.001f || qAbs(deltaYaw) > 0.001f);
 
     if (hasMovement) {
-        if (m_tcpClient && m_tcpClient->isConnected()) {
-            m_tcpClient->sendEndEffectorControl(deltaX, deltaY, deltaZ, deltaRoll, deltaPitch, deltaYaw);
+        if (m_controller && m_controller->isTcpConnected()) {
+            m_controller->sendEndEffectorControl(deltaX, deltaY, deltaZ, deltaRoll, deltaPitch, deltaYaw);
         }
 
         // 日志（500ms节流防止刷屏）

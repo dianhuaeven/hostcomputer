@@ -8,20 +8,15 @@
 #include <array>
 #include "src/communication/SharedStructs.h"
 
+#include "src/controller/controller.h"
 #include "src/controller/KeyboardController.h"
 #include "src/controller/DisplayLayoutManager.h"
 #include "src/controller/CO2DisplayWidget.h"
 #include "src/controller/GamepadDisplayWidget.h"
 #include "src/controller/handlekey.h"
 #include "src/controller/RtspPlayerWidget.h"
-
-namespace Communication {
-    class SerialPortManager;
-    class ROS1TcpClient;
-}
-namespace Parser {
-    class ProtocolParser;
-}
+#include "src/controller/RobotViewModel.h"
+#include <QQuickWidget>
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -65,10 +60,8 @@ private slots:
     void on_action_tcp_connect_triggered();
     void on_action_disconnect_triggered();
     void on_action_exit_triggered();
-    void on_action_fullscreen_triggered();
     void on_action_reset_layout_triggered();
     void on_action_about_triggered();
-    void on_action_keyboard_control_toggled(bool checked);
 
     void on_btn_clear_commands_clicked();
     void on_btn_clear_errors_clicked();
@@ -78,25 +71,20 @@ private slots:
     void updateSystemStatus();  // 定时更新系统状态
 
 private:
-    void setupSerialPort();
-    void setupParser();
+    void setupController();
     void setupConnections();
     void setupStatusBar();
     void setupDisplayLayout();
-    void setupTcpClient();
     void setupKeyboardController();
     void setupHandleKey();
     void setupTimers();
     void cleanupResources();
-    void reinitialize();       // 重新初始化
     void updateConnectionDisplay();
     void updateHeartbeatDisplay();
     void updateGamepadDisplay();
     void formatAndAddCommand(const QString& command);
     void formatAndAddError(const QString& error);
     QString getCurrentTimestamp() const;
-    QStringList getAvailableSerialPorts();
-    bool connectToSerialPort(const QString& portName, int baudRate);
 
     // 模式切换
     void switchControlMode(ControlMode mode);
@@ -104,24 +92,33 @@ private:
     void handleGamepadArmMode(const ControllerState &state);
 
 private slots:
-    void onSerialDataReceived(const QByteArray &data);
-    void onCompleteFrameReceived(const QByteArray &frame);
+    // Controller层信号处理
+    void onSerialConnected();
+    void onSerialDisconnected();
+    void onSerialError(const QString &error);
+    void onTcpConnected();
+    void onTcpDisconnected();
+    void onTcpError(const QString &error);
+    void onTcpHeartbeatChanged(bool online);
     void onEsp32StateReceived(const Communication::ESP32State &state);
-    void onGamepadStateReceived(const ControllerState &state);
     void onCO2DataReceived(float ppm);
     void onIMUDataReceived(float roll, float pitch, float yaw, float accelX, float accelY, float accelZ);
+    void onCameraInfoReceived(int cameraId, bool online, const QString &codec,
+                              int width, int height, int fps, int bitrate,
+                              const QString &rtspUrl);
+
+    // 手柄信号处理
+    void onGamepadStateReceived(const ControllerState &state);
+
+    // UI交互
     void showSerialPortSelection();
     void showTcpConnectionDialog();
-    void refreshSerialPorts();
 
 private:
     Ui::MainWindow *ui;
 
-    // 串口和解析器组件
-    Communication::SerialPortManager* m_serialManager;
-
-    // TCP客户端（ROS通信）
-    Communication::ROS1TcpClient* m_tcpClient;
+    // 业务逻辑控制器
+    Controller* m_controller;
 
     // 键盘控制器
     KeyboardController* m_keyboardController;
@@ -140,6 +137,10 @@ private:
 
     // 手柄输入驱动
     HandleKey* m_handleKey;
+
+    // 3D机器人姿态视图
+    QQuickWidget* m_robotView = nullptr;
+    RobotViewModel* m_robotViewModel = nullptr;
 
     // 状态管理
     bool m_isConnected = false;
