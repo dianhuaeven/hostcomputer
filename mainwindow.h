@@ -47,7 +47,7 @@ public:
     void addCommand(const QString& command);
     void addError(const QString& error);
     void updateCarAttitude(double roll, double pitch, double yaw);
-    void updateJointsData(const Communication::ESP32State& esp32State);
+    void updateJointsData(const Communication::MotorState& motorState);
 
 
 protected:
@@ -93,14 +93,11 @@ private:
 
 private slots:
     // Controller层信号处理
-    void onSerialConnected();
-    void onSerialDisconnected();
-    void onSerialError(const QString &error);
     void onTcpConnected();
     void onTcpDisconnected();
     void onTcpError(const QString &error);
     void onTcpHeartbeatChanged(bool online);
-    void onEsp32StateReceived(const Communication::ESP32State &state);
+    void onMotorStateReceived(const Communication::MotorState &state);
     void onCO2DataReceived(float ppm);
     void onIMUDataReceived(float roll, float pitch, float yaw, float accelX, float accelY, float accelZ);
     void onCameraInfoReceived(int cameraId, bool online, const QString &codec,
@@ -111,7 +108,6 @@ private slots:
     void onGamepadStateReceived(const ControllerState &state);
 
     // UI交互
-    void showSerialPortSelection();
     void showTcpConnectionDialog();
 
 private:

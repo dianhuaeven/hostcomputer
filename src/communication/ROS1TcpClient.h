@@ -35,7 +35,7 @@ public:
     bool isConnected() const;
 
     // 数据发送（线程安全）
-    bool sendMotorCommand(const ESP32State &esp32State);
+    bool sendMotorCommand(const MotorState &motorState);
     bool sendJointControl(int jointId, float position, float velocity = 0.0f);
     bool sendVelocityCommand(float linearX, float linearY, float angularZ);
     bool sendEmergencyStop();
@@ -68,7 +68,7 @@ signals:
     void connectionError(const QString &error);
 
     // 数据接收信号
-    void motorStateReceived(const ESP32State &esp32State);
+    void motorStateReceived(const MotorState &motorState);
     void jointDataReceived(int jointId, float position, float current, float torque);
     void systemStatusReceived(const QJsonObject &status);
     void rawMessageReceived(const QByteArray &message);
@@ -84,7 +84,7 @@ public slots:
     // 供外部调用的槽（跨线程）
     void slotConnectToROS(const QString &hostAddress, quint16 port);
     void slotDisconnectFromROS();
-    void slotSendMotorCommand(const ESP32State &esp32State);
+    void slotSendMotorCommand(const MotorState &motorState);
     void slotSendJointControl(int jointId, float position, float velocity);
     void slotSendEmergencyStop();
     void slotSendSystemCommand(const QString &command, const QString &paramsJson);
@@ -100,7 +100,7 @@ private:
     void setupConnection();
     bool sendMessage(const QJsonObject &message);
     void processReceivedData();
-    ESP32State parseMotorState(const QJsonObject &json);
+    MotorState parseMotorState(const QJsonObject &json);
     void emitStatsUpdate();
 
 private:

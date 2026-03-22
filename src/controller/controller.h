@@ -1,18 +1,26 @@
+
 #ifndef CONTROLLER_H
 #define CONTROLLER_H
 
 #include <QObject>
 #include <QString>
 #include <QByteArray>
+#include <QJsonObject>
+#include <memory>
+#include "SharedStructs.h"
+
+namespace Communication {
+    class ROS1TcpClient;
+}
 
 /**
  * @brief Controller层 - 业务逻辑处理核心
  *
  * 职责：
- * 1. 协调Model、Parser、Communication三层
+ * 1. 协调Communication层
  * 2. 处理用户交互逻辑
- * 3. 管理电机控制状态
- * 4. 提供统一的业务接口
+ * 3. 管理通信状态和数据流转
+ * 4. 提供统一的业务接口给UI层
  */
 class Controller : public QObject
 {
@@ -27,36 +35,80 @@ public:
     void start();
     void stop();
 
-    // 通信接口
-    bool connectCAN(const QString &interface);
-    void disconnectCAN();
-    bool isConnected() const;
+    // TCP通信接口
+    bool connectTcp(const QString &host, quint16 port);
+    void disconnectTcp();
+    bool isTcpConnected() const;
+
+    // 命令发送接口
+    bool sendMotorCommand(const Communication::MotorState &state);
+    bool sendControlCommand(const Communication::Command &command);
+    bool sendVelocityCommand(float linearX, float linearY, float angularZ);
+    bool sendJointControl(int jointId, float position, float velocity);
+    bool sendEmergencyStop();
+    bool sendSystemCommand(const QString &command, const QJsonObject &params = QJsonObject());
+    bool sendEndEffectorControl(float x, float y, float z, float roll, float pitch, float yaw);
+
+    // TCP连接管理（供UI层对话框使用）
+    bool connectToROS(const QString &host, quint16 port);
+    void disconnectFromROS();
+    QString getROSHost() const;
+    quint16 getROSPort() const;
+
+    // 获取统计信息
+    struct Statistics {
+        quint64 messagesSent;
+        quint64 messagesReceived;
+        quint64 bytesSent;
+        quint64 bytesReceived;
+        quint64 connectionCount;
+        quint64 reconnectCount;
+    };
+    Statistics getTcpStatistics() const;
 
 signals:
-    // 通信状态信号
-    void connectionStatusChanged(bool connected);
-    void dataReceived(const QByteArray &data);
+    // TCP状态信号
+    void tcpConnected();
+    void tcpDisconnected();
+    void tcpError(const QString &error);
+    void tcpHeartbeatChanged(bool online);
+
+    // 数据接收信号
+    void motorStateReceived(const Communication::MotorState &state);
+    void co2DataReceived(float ppm);
+    void imuDataReceived(float roll, float pitch, float yaw,
+                         float accelX, float accelY, float accelZ);
+    void cameraInfoReceived(int cameraId, bool online, const QString &codec,
+                           int width, int height, int fps, int bitrate,
+                           const QString &rtspUrl);
 
     // 系统状态信号
     void systemError(const QString &error);
     void operationCompleted(const QString &operation);
 
 private slots:
-    // 内部处理槽函数
-    void onDataReceived(const QByteArray &data);
-    void onConnectionChanged(bool connected);
+    // TCP数据处理
+    void onTcpConnected();
+    void onTcpDisconnected();
+    void onTcpError(const QString &error);
+    void onTcpCO2DataReceived(float ppm);
+    void onTcpIMUDataReceived(float roll, float pitch, float yaw,
+                              float accelX, float accelY, float accelZ);
+    void onTcpCameraInfoReceived(int cameraId, const QString &rtspUrl, bool online,
+                                 const QString &codec, int width, int height, int fps, int bitrate);
 
 private:
     // 内部辅助方法
     void setupConnections();
-    void processReceivedData(const QByteArray &data);
     void handleError(const QString &error);
 
 private:
+    // 通信组件
+    Communication::ROS1TcpClient* m_tcpClient;
+
     // 状态变量
     bool m_initialized;
     bool m_running;
-    bool m_connected;
 };
 
 #endif // CONTROLLER_H

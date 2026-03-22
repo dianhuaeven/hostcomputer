@@ -27,13 +27,6 @@ enum class ErrorCode {
     NetworkSendFailed = 103,
     NetworkReceiveFailed = 104,
 
-    // 串口错误 (200-299)
-    SerialPortOpenFailed = 200,
-    SerialPortNotOpen = 201,
-    SerialPortWriteFailed = 202,
-    SerialPortReadFailed = 203,
-    SerialPortTimeout = 204,
-
     // 协议错误 (300-399)
     ProtocolParseError = 300,
     ProtocolChecksumError = 301,

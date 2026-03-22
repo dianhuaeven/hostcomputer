@@ -24,14 +24,17 @@ set(CONTROLLER_SOURCES
     KeyboardController.h
     handlekey.cpp
     handlekey.h
-    RealCameraManager.cpp
-    RealCameraManager.h
     RtspPlayerWidget.cpp
     RtspPlayerWidget.h
+    RobotViewModel.cpp
+    RobotViewModel.h
 )
 
 # 创建静态库
 add_library(controller_layer STATIC ${CONTROLLER_SOURCES})
+
+# 绕过 GCC 13.1 汇编器内部错误 (Segmentation fault)
+set_source_files_properties(handlekey.cpp PROPERTIES COMPILE_FLAGS "-O0")
 
 # 链接依赖
 target_link_libraries(controller_layer PUBLIC
@@ -41,13 +44,12 @@ target_link_libraries(controller_layer PUBLIC
     Qt6::Multimedia
     Qt6::MultimediaWidgets
 
+    # 层级依赖
+    communication_layer
+    utils_layer
+
     # OpenCV 依赖（如果需要）
     # ${OpenCV_LIBS}  # 暂时注释，避免依赖问题
-
-    # TODO: 添加其他层级依赖（实现后启用）
-    # model_layer
-    # parser_layer
-    # communication_layer
 )
 
 # Windows平台链接XInput库（手柄驱动）
@@ -58,8 +60,6 @@ endif()
 # 设置包含目录
 target_include_directories(controller_layer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    # TODO: 添加其他层级包含目录（实现后启用）
-    # ${CMAKE_SOURCE_DIR}/src/model
-    # ${CMAKE_SOURCE_DIR}/src/parser
-    # ${CMAKE_SOURCE_DIR}/src/communication
+    ${CMAKE_SOURCE_DIR}/src/communication
+    ${CMAKE_SOURCE_DIR}/src/utils
 )

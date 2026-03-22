@@ -78,11 +78,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // 添加系统启动提示
     addCommand("[系统] 主窗口初始化完成");
-    addCommand("[系统] 请连接串口设备开始接收数据");
-
-    // USB-CDC握手提示
-    addCommand("[USB-CDC] 提示：等待ESP32设备连接和握手...");
-    addCommand("[USB-CDC] 如果ESP32发送握手信号，程序会自动响应");
+    addCommand("[系统] 请连接TCP设备开始接收数据");
 }
 
 MainWindow::~MainWindow()
@@ -104,11 +100,6 @@ void MainWindow::setupController()
 
     // 连接Controller信号到UI更新
 
-    // 串口状态
-    connect(m_controller, &Controller::serialConnected, this, &MainWindow::onSerialConnected);
-    connect(m_controller, &Controller::serialDisconnected, this, &MainWindow::onSerialDisconnected);
-    connect(m_controller, &Controller::serialError, this, &MainWindow::onSerialError);
-
     // TCP状态
     connect(m_controller, &Controller::tcpConnected, this, &MainWindow::onTcpConnected);
     connect(m_controller, &Controller::tcpDisconnected, this, &MainWindow::onTcpDisconnected);
@@ -116,7 +107,7 @@ void MainWindow::setupController()
     connect(m_controller, &Controller::tcpHeartbeatChanged, this, &MainWindow::onTcpHeartbeatChanged);
 
     // 数据接收
-    connect(m_controller, &Controller::esp32StateReceived, this, &MainWindow::onEsp32StateReceived);
+    connect(m_controller, &Controller::motorStateReceived, this, &MainWindow::onMotorStateReceived);
     connect(m_controller, &Controller::co2DataReceived, this, &MainWindow::onCO2DataReceived);
     connect(m_controller, &Controller::imuDataReceived, this, &MainWindow::onIMUDataReceived);
     connect(m_controller, &Controller::cameraInfoReceived, this, &MainWindow::onCameraInfoReceived);
@@ -404,15 +395,15 @@ void MainWindow::updateCarAttitude(double roll, double pitch, double yaw)
         m_robotViewModel->updateAttitude(roll, pitch, yaw);
 }
 
-void MainWindow::updateJointsData(const Communication::ESP32State& esp32State)
+void MainWindow::updateJointsData(const Communication::MotorState& motorState)
 {
     // 更新3D视图腿部角度（关节0-3对应4条腿，位置值直接作为角度度数）
     if (m_robotViewModel) {
         m_robotViewModel->updateLegs(
-            esp32State.joints[0].position / 10.0,
-            esp32State.joints[1].position / 10.0,
-            esp32State.joints[2].position / 10.0,
-            esp32State.joints[3].position / 10.0
+            motorState.joints[0].position / 10.0,
+            motorState.joints[1].position / 10.0,
+            motorState.joints[2].position / 10.0,
+            motorState.joints[3].position / 10.0
         );
     }
 
@@ -427,21 +418,21 @@ void MainWindow::updateJointsData(const Communication::ESP32State& esp32State)
     QString jointsData = "=== 6关节数据 ===\n";
     for (int i = 0; i < 6; ++i) {
         jointsData += QString("关节 %1:\n").arg(i + 1);
-        jointsData += QString("  位置: %1\n").arg(esp32State.joints[i].position / 1000.0f, 0, 'f', 3);
-        jointsData += QString("  电流: %1 A\n").arg(esp32State.joints[i].current / 1000.0f, 0, 'f', 3);
-        jointsData += QString("  执行器位置: %1\n").arg(esp32State.executor_position / 1000.0f, 0, 'f', 3);
-        jointsData += QString("  执行器扭矩: %1\n").arg(esp32State.executor_torque / 1000.0f, 0, 'f', 3);
-        jointsData += QString("  执行器标志: %1\n").arg(esp32State.executor_flags);
-        jointsData += QString("  保留字段: %1\n").arg(esp32State.reserved);
+        jointsData += QString("  位置: %1\n").arg(motorState.joints[i].position / 1000.0f, 0, 'f', 3);
+        jointsData += QString("  电流: %1 A\n").arg(motorState.joints[i].current / 1000.0f, 0, 'f', 3);
+        jointsData += QString("  执行器位置: %1\n").arg(motorState.executor_position / 1000.0f, 0, 'f', 3);
+        jointsData += QString("  执行器扭矩: %1\n").arg(motorState.executor_torque / 1000.0f, 0, 'f', 3);
+        jointsData += QString("  执行器标志: %1\n").arg(motorState.executor_flags);
+        jointsData += QString("  保留字段: %1\n").arg(motorState.reserved);
         if (i < 5) jointsData += "\n";
     }
 
     // 添加执行器数据摘要
     jointsData += "\n=== 执行器数据摘要 ===\n";
-    jointsData += QString("执行器位置: %1\n").arg(esp32State.executor_position / 1000.0f, 0, 'f', 3);
-    jointsData += QString("执行器扭矩: %1\n").arg(esp32State.executor_torque / 1000.0f, 0, 'f', 3);
-    jointsData += QString("执行器标志: 0x%1\n").arg(esp32State.executor_flags, 2, 16, QChar('0'));
-    jointsData += QString("保留字段: %1\n").arg(esp32State.reserved);
+    jointsData += QString("执行器位置: %1\n").arg(motorState.executor_position / 1000.0f, 0, 'f', 3);
+    jointsData += QString("执行器扭矩: %1\n").arg(motorState.executor_torque / 1000.0f, 0, 'f', 3);
+    jointsData += QString("执行器标志: 0x%1\n").arg(motorState.executor_flags, 2, 16, QChar('0'));
+    jointsData += QString("保留字段: %1\n").arg(motorState.reserved);
 
     // 设置文本内容
     ui->text_errors->setText(header + jointsData);
@@ -452,14 +443,14 @@ void MainWindow::updateJointsData(const Communication::ESP32State& esp32State)
     // 格式化显示6个关节的位置数据（用于命令区域）
     QString positionData = QString("[关节数据] 位置: ");
     for (int i = 0; i < 6; ++i) {
-        positionData += QString("J%1:%2 ").arg(i+1).arg(esp32State.joints[i].position / 1000.0f, 0, 'f', 3);
+        positionData += QString("J%1:%2 ").arg(i+1).arg(motorState.joints[i].position / 1000.0f, 0, 'f', 3);
     }
     addCommand(positionData);
 
     // 格式化显示6个关节的电流数据（用于命令区域）
     QString currentData = QString("[电流数据] 电流: ");
     for (int i = 0; i < 6; ++i) {
-        currentData += QString("J%1:%2A ").arg(i+1).arg(esp32State.joints[i].current / 1000.0f, 0, 'f', 3);
+        currentData += QString("J%1:%2A ").arg(i+1).arg(motorState.joints[i].current / 1000.0f, 0, 'f', 3);
     }
     addCommand(currentData);
 
@@ -500,8 +491,8 @@ void MainWindow::keyReleaseEvent(QKeyEvent *event)
 // 菜单槽函数
 void MainWindow::on_action_connect_triggered()
 {
-    // 显示串口选择对话框
-    showSerialPortSelection();
+    // 显示TCP连接对话框
+    showTcpConnectionDialog();
 }
 
 void MainWindow::on_action_tcp_connect_triggered()
@@ -511,14 +502,9 @@ void MainWindow::on_action_tcp_connect_triggered()
 
 void MainWindow::on_action_disconnect_triggered()
 {
-    if (m_controller && m_controller->isSerialConnected()) {
-        m_controller->disconnectSerialPort();
-        updateConnectionStatus(false);
-        addCommand("[操作] 串口连接已断开");
-    }
-
     if (m_controller && m_controller->isTcpConnected()) {
         m_controller->disconnectFromROS();
+        updateConnectionStatus(false);
         addCommand("[操作] TCP连接已断开");
     }
 }
@@ -574,7 +560,7 @@ void MainWindow::cleanupResources()
         m_keyboardController->disconnect();
     }
 
-    // 4. 停止Controller（会自动断开串口和TCP）
+    // 4. 停止Controller（会自动断开TCP）
     if (m_controller) {
         m_controller->stop();
         m_controller->disconnect();
@@ -770,99 +756,6 @@ void MainWindow::formatAndAddError(const QString& error)
 QString MainWindow::getCurrentTimestamp() const
 {
     return QDateTime::currentDateTime().toString("hh:mm:ss");
-}
-
-void MainWindow::showSerialPortSelection()
-{
-    // 创建自定义对话框
-    QDialog dialog(this);
-    dialog.setWindowTitle("选择串口设备");
-    dialog.resize(400, 200);
-
-    QVBoxLayout* layout = new QVBoxLayout(&dialog);
-
-    // 添加说明标签
-    QLabel* infoLabel = new QLabel("请选择串口设备和波特率进行连接:");
-    layout->addWidget(infoLabel);
-
-    // 串口选择
-    QHBoxLayout* portLayout = new QHBoxLayout();
-    portLayout->addWidget(new QLabel("串口:"));
-    QComboBox* portCombo = new QComboBox();
-    portCombo->setMinimumWidth(200);
-    portLayout->addWidget(portCombo);
-    layout->addLayout(portLayout);
-
-    // 波特率选择
-    QHBoxLayout* baudLayout = new QHBoxLayout();
-    baudLayout->addWidget(new QLabel("波特率:"));
-    QComboBox* baudCombo = new QComboBox();
-    baudCombo->addItems({"9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"});
-    baudCombo->setCurrentText("115200");
-    baudCombo->setMinimumWidth(200);
-    baudLayout->addWidget(baudCombo);
-    layout->addLayout(baudLayout);
-
-    // 按钮区域
-    QHBoxLayout* buttonLayout = new QHBoxLayout();
-    QPushButton* refreshButton = new QPushButton("刷新串口列表");
-    buttonLayout->addWidget(refreshButton);
-    buttonLayout->addStretch();
-
-    QDialogButtonBox* buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    buttonLayout->addWidget(buttonBox);
-    layout->addLayout(buttonLayout);
-
-    // 刷新串口列表的函数
-    auto refreshPorts = [&]() {
-        QStringList availablePorts = m_controller ? m_controller->getAvailableSerialPorts() : QStringList();
-        portCombo->clear();
-        portCombo->addItems(availablePorts);
-
-        if (availablePorts.isEmpty()) {
-            addCommand("[系统] 串口刷新完成 - 未发现可用串口");
-        } else {
-            addCommand(QString("[系统] 串口刷新完成 - 发现 %1 个可用串口").arg(availablePorts.size()));
-        }
-    };
-
-    // 连接刷新按钮
-    connect(refreshButton, &QPushButton::clicked, refreshPorts);
-
-    // 连接按钮
-    connect(buttonBox, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-
-    // 初始化串口列表
-    refreshPorts();
-
-    // 如果没有可用串口，显示提示
-    if (portCombo->count() == 0) {
-        QMessageBox::warning(this, "Serial Port Error",
-            "No serial port devices detected.\n"
-            "Please check device connection and click 'Refresh Serial Port List' button to retry.\n\n"
-            "Common causes:\n"
-            "- USB to serial driver not installed\n"
-            "- Device not connected\n"
-            "- Device occupied by other programs");
-    }
-
-    // 显示对话框
-    if (dialog.exec() == QDialog::Accepted) {
-        QString selectedPort = portCombo->currentText();
-        int selectedBaudRate = baudCombo->currentText().toInt();
-
-        if (!selectedPort.isEmpty()) {
-            // 通过Controller连接串口
-            bool success = m_controller ? m_controller->connectSerialPort(selectedPort, selectedBaudRate) : false;
-            if (success) {
-                updateConnectionStatus(true);
-                addCommand(QString("[串口] 成功连接 %1, 波特率: %2").arg(selectedPort).arg(selectedBaudRate));
-            } else {
-                addError(QString("[错误] 串口连接失败 %1, 波特率: %2").arg(selectedPort).arg(selectedBaudRate));
-            }
-        }
-    }
 }
 
 
@@ -1186,23 +1079,6 @@ void MainWindow::showTcpConnectionDialog()
 
 // ==================== Controller信号处理 ====================
 
-void MainWindow::onSerialConnected()
-{
-    updateConnectionStatus(true);
-    addCommand("[串口] 设备已连接");
-}
-
-void MainWindow::onSerialDisconnected()
-{
-    updateConnectionStatus(false);
-    addCommand("[串口] 设备已断开");
-}
-
-void MainWindow::onSerialError(const QString &error)
-{
-    addError(QString("[串口] %1").arg(error));
-}
-
 void MainWindow::onTcpConnected()
 {
     updateConnectionStatus(true);
@@ -1231,9 +1107,8 @@ void MainWindow::onTcpHeartbeatChanged(bool online)
     updateHeartbeatStatus(online);
 }
 
-void MainWindow::onEsp32StateReceived(const Communication::ESP32State &state)
+void MainWindow::onMotorStateReceived(const Communication::MotorState &state)
 {
-    // 直接使用ESP32State更新UI显示
     updateJointsData(state);
 }
 

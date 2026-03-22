@@ -349,6 +349,24 @@ Intel NUC / 摄像头                    Windows PC (上位机)
 }
 ```
 
+**摄像头信息推送格式** (下位机 → 上位机):
+```json
+{
+  "type": "camera_info",
+  "camera_id": 0,
+  "online": true,
+  "codec": "h265",
+  "width": 1280,
+  "height": 720,
+  "fps": 30,
+  "bitrate_kbps": 2000,
+  "rtsp_url": "rtsp://192.168.1.100:8554/cam0"
+}
+```
+- `camera_id`: 0-4，对应上位机 2x3 网格的前 5 个格子
+- `online`: true 时自动启动 RTSP 播放，false 时停止播放
+- 上位机通过 `RtspPlayerWidget` 控件接收并自动播放 RTSP 视频流
+
 ### USB CDC协议 (与ESP32)
 
 **52字节固定帧结构**:

@@ -105,13 +105,6 @@ QString ErrorHandler::getErrorDescription(ErrorCode code)
         {ErrorCode::NetworkSendFailed, "网络发送失败"},
         {ErrorCode::NetworkReceiveFailed, "网络接收失败"},
 
-        // 串口错误
-        {ErrorCode::SerialPortOpenFailed, "串口打开失败"},
-        {ErrorCode::SerialPortNotOpen, "串口未打开"},
-        {ErrorCode::SerialPortWriteFailed, "串口写入失败"},
-        {ErrorCode::SerialPortReadFailed, "串口读取失败"},
-        {ErrorCode::SerialPortTimeout, "串口超时"},
-
         // 协议错误
         {ErrorCode::ProtocolParseError, "协议解析错误"},
         {ErrorCode::ProtocolChecksumError, "协议校验和错误"},

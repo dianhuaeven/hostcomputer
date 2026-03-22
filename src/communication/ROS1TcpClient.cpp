@@ -114,7 +114,7 @@ bool ROS1TcpClient::isConnected() const
     return m_isConnected && m_socket->state() == QAbstractSocket::ConnectedState;
 }
 
-bool ROS1TcpClient::sendMotorCommand(const ESP32State &esp32State)
+bool ROS1TcpClient::sendMotorCommand(const MotorState &motorState)
 {
     if (!isConnected()) {
         HANDLE_ERROR(Utils::ErrorCode::NetworkDisconnected, MODULE, "未连接到ROS，无法发送电机命令");
@@ -128,17 +128,17 @@ bool ROS1TcpClient::sendMotorCommand(const ESP32State &esp32State)
     QJsonArray jointsArray;
     for (int i = 0; i < 6; ++i) {
         QJsonObject joint;
-        joint["position"] = esp32State.joints[i].position / 1000.0f;
-        joint["current"] = esp32State.joints[i].current / 1000.0f;
+        joint["position"] = motorState.joints[i].position / 1000.0f;
+        joint["current"] = motorState.joints[i].current / 1000.0f;
         jointsArray.append(joint);
     }
     command["joints"] = jointsArray;
 
     // 添加执行器数据
-    command["executor_position"] = esp32State.executor_position / 1000.0f;
-    command["executor_torque"] = esp32State.executor_torque / 1000.0f;
-    command["executor_flags"] = esp32State.executor_flags;
-    command["reserved"] = esp32State.reserved;
+    command["executor_position"] = motorState.executor_position / 1000.0f;
+    command["executor_torque"] = motorState.executor_torque / 1000.0f;
+    command["executor_flags"] = motorState.executor_flags;
+    command["reserved"] = motorState.reserved;
 
     return sendMessage(command);
 }
@@ -328,9 +328,9 @@ void ROS1TcpClient::slotDisconnectFromROS()
     disconnectFromROS();
 }
 
-void ROS1TcpClient::slotSendMotorCommand(const ESP32State &esp32State)
+void ROS1TcpClient::slotSendMotorCommand(const MotorState &motorState)
 {
-    sendMotorCommand(esp32State);
+    sendMotorCommand(motorState);
 }
 
 void ROS1TcpClient::slotSendJointControl(int jointId, float position, float velocity)
@@ -504,7 +504,7 @@ void ROS1TcpClient::processReceivedData()
         }
 
         if (msgType == "motor_state") {
-            ESP32State state = parseMotorState(msg);
+            MotorState state = parseMotorState(msg);
             emit motorStateReceived(state);
         } else if (msgType == "joint_data") {
             int jointId = msg["joint_id"].toInt();
@@ -543,9 +543,9 @@ void ROS1TcpClient::processReceivedData()
     emitStatsUpdate();
 }
 
-ESP32State ROS1TcpClient::parseMotorState(const QJsonObject &json)
+MotorState ROS1TcpClient::parseMotorState(const QJsonObject &json)
 {
-    ESP32State state;
+    MotorState state;
 
     QJsonArray jointsArray = json["joints"].toArray();
     for (int i = 0; i < 6 && i < jointsArray.size(); ++i) {

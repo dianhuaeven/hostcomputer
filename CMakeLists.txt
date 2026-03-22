@@ -8,6 +8,9 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# 全局禁用优化，绕过 GCC 13.1 汇编器 Segmentation fault
+add_compile_options(-O0)
+
 # ============================================
 # Qt6 Modules - 灵活配置
 # ============================================
@@ -16,9 +19,10 @@ find_package(Qt6 QUIET COMPONENTS
     Core
     Widgets
     Network
-    SerialPort
     Multimedia
     MultimediaWidgets
+    Quick           # <-- 确保添加
+    QuickWidgets    # <-- 用于在 Widget 中嵌入 QML
 )
 
 if(NOT Qt6_FOUND)
@@ -27,7 +31,6 @@ if(NOT Qt6_FOUND)
         Core
         Widgets
         Network
-        SerialPort
         Multimedia
         MultimediaWidgets
     )
@@ -35,8 +38,9 @@ if(NOT Qt6_FOUND)
 else()
     message(STATUS "Qt6 found successfully")
     # 尝试添加可选的Qt6模块
-    find_package(Qt6 QUIET COMPONENTS Quick)
+        find_package(Qt6 QUIET COMPONENTS Quick)
     find_package(Qt6 QUIET COMPONENTS QuickWidgets)
+    find_package(Qt6 QUIET COMPONENTS Quick3D)
     find_package(Qt6 QUIET COMPONENTS OpenGL)
     find_package(Qt6 QUIET COMPONENTS OpenGLWidgets)
     find_package(Qt6 QUIET COMPONENTS Charts)
@@ -72,8 +76,6 @@ endif()
 add_subdirectory(src/utils)          # 工具层（日志、错误处理）
 add_subdirectory(src/controller)     # 业务逻辑层
 add_subdirectory(src/communication)  # 通信层（CAN/TCP/Serial）
-add_subdirectory(src/parser)         # 协议解析层
-add_subdirectory(src/model)          # ��据模型层
 # add_subdirectory(resources)        # 资源(qrc) - 暂时注释掉，等有资源文件时再启用
 
 # ============================================
@@ -89,7 +91,12 @@ set(PROJECT_SOURCES
 qt_add_executable(hostcomputer
     MANUAL_FINALIZATION
     ${PROJECT_SOURCES}
+    resources/resources.qrc
 )
+
+# 解决 GCC 13.1 汇编器内部错误 (Segmentation fault)
+# 对 mainwindow.cpp 禁用优化以绕过 as.exe 的 bug
+set_source_files_properties(mainwindow.cpp PROPERTIES COMPILE_FLAGS "-O0")
 
 # ============================================
 # 链接各层模块
@@ -99,12 +106,9 @@ if(QT_VERSION EQUAL 6)
     target_link_libraries(hostcomputer PRIVATE
         controller_layer
         communication_layer
-        parser_layer
-        model_layer
         utils_layer
         Qt6::Core
         Qt6::Widgets
-        Qt6::SerialPort
         Qt6::Network
         Qt6::Multimedia
         Qt6::MultimediaWidgets
@@ -115,6 +119,9 @@ if(QT_VERSION EQUAL 6)
     endif()
     if(TARGET Qt6::QuickWidgets)
         target_link_libraries(hostcomputer PRIVATE Qt6::QuickWidgets)
+    endif()
+    if(TARGET Qt6::Quick3D)
+        target_link_libraries(hostcomputer PRIVATE Qt6::Quick3D)
     endif()
     if(TARGET Qt6::OpenGL)
         target_link_libraries(hostcomputer PRIVATE Qt6::OpenGL)
@@ -129,14 +136,22 @@ else()
     target_link_libraries(hostcomputer PRIVATE
         controller_layer
         communication_layer
-        parser_layer
-        model_layer
         Qt5::Core
         Qt5::Widgets
-        Qt5::SerialPort
         Qt5::Network
         Qt5::Multimedia
         Qt5::MultimediaWidgets
+    )
+endif()
+
+# 注册QML模块（嵌入RobotView.qml到资源系统）
+if(TARGET Qt6::Quick)
+    qt_add_qml_module(hostcomputer
+        URI RobotUI
+        VERSION 1.0
+        QML_FILES
+            resources/qml/RobotView.qml
+        NO_RESOURCE_TARGET_PATH
     )
 endif()
 
