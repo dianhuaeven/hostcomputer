@@ -85,6 +85,7 @@ private:
     void formatAndAddCommand(const QString& command);
     void formatAndAddError(const QString& error);
     QString getCurrentTimestamp() const;
+    void triggerEmergencyStop();
 
     // 模式切换
     void switchControlMode(ControlMode mode);
@@ -149,6 +150,7 @@ private:
     quint64 m_lastMessagesReceived = 0;
     QString m_motorMode = "待机";
     int m_errorCount = 0;
+    qint64 m_lastEmergencyStopMs = 0;
 
     // 控制模式
     ControlMode m_controlMode = ControlMode::Vehicle;

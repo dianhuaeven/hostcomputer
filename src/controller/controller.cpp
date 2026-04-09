@@ -217,6 +217,8 @@ void Controller::setupConnections()
                 this, &Controller::onTcpDisconnected);
         connect(m_tcpClient, &Communication::ROS1TcpClient::connectionError,
                 this, &Controller::onTcpError);
+        connect(m_tcpClient, &Communication::ROS1TcpClient::motorStateReceived,
+                this, &Controller::onTcpMotorStateReceived);
         connect(m_tcpClient, &Communication::ROS1TcpClient::co2DataReceived,
                 this, &Controller::onTcpCO2DataReceived);
         connect(m_tcpClient, &Communication::ROS1TcpClient::imuDataReceived,
@@ -244,6 +246,11 @@ void Controller::onTcpError(const QString &error)
 {
     qCritical() << QString("TCP error: %1").arg(error);
     emit tcpError(error);
+}
+
+void Controller::onTcpMotorStateReceived(const Communication::MotorState &state)
+{
+    emit motorStateReceived(state);
 }
 
 void Controller::onTcpCO2DataReceived(float ppm)

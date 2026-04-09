@@ -91,6 +91,7 @@ private slots:
     void onTcpConnected();
     void onTcpDisconnected();
     void onTcpError(const QString &error);
+    void onTcpMotorStateReceived(const Communication::MotorState &state);
     void onTcpCO2DataReceived(float ppm);
     void onTcpIMUDataReceived(float roll, float pitch, float yaw,
                               float accelX, float accelY, float accelZ);

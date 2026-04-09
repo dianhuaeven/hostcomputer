@@ -61,9 +61,7 @@ MainWindow::MainWindow(QWidget *parent)
     QShortcut *spaceStop = new QShortcut(QKeySequence(Qt::Key_Space), this);
     spaceStop->setContext(Qt::ApplicationShortcut);
     connect(spaceStop, &QShortcut::activated, this, [this]() {
-        if (m_keyboardController && m_keyboardController->isEnabled()) {
-            on_btn_emergency_stop_clicked();
-        }
+        triggerEmergencyStop();
     });
 
     // 设置连接和状态栏
@@ -474,6 +472,12 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {
+    if (!event->isAutoRepeat() && event->key() == Qt::Key_Space) {
+        triggerEmergencyStop();
+        event->accept();
+        return;
+    }
+
     if (m_keyboardController && m_keyboardController->isEnabled()) {
         m_keyboardController->handleKeyPress(event);
     }
@@ -482,6 +486,11 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 
 void MainWindow::keyReleaseEvent(QKeyEvent *event)
 {
+    if (!event->isAutoRepeat() && event->key() == Qt::Key_Space) {
+        event->accept();
+        return;
+    }
+
     if (m_keyboardController && m_keyboardController->isEnabled()) {
         m_keyboardController->handleKeyRelease(event);
     }
@@ -601,6 +610,7 @@ void MainWindow::on_btn_clear_errors_clicked()
 
 void MainWindow::on_btn_emergency_stop_clicked()
 {
+    const bool restoreKeyboardControl = m_keyboardController && m_keyboardController->isEnabled();
     // === 最高优先级急停处理 ===
     addCommand("[急停] ⚠️ 用户触发急停按钮!");
 
@@ -619,6 +629,11 @@ void MainWindow::on_btn_emergency_stop_clicked()
     }
 
     // 3. 切换回车体模式（安全模式）
+    if (m_keyboardController && !restoreKeyboardControl) {
+        m_keyboardController->setEnabled(false);
+        addCommand("[Emergency Stop] Keyboard control kept disabled");
+    }
+
     if (m_controlMode != ControlMode::Vehicle) {
         switchControlMode(ControlMode::Vehicle);
         addCommand("[急停] 已切换回车体模式");
@@ -756,6 +771,17 @@ void MainWindow::formatAndAddError(const QString& error)
 QString MainWindow::getCurrentTimestamp() const
 {
     return QDateTime::currentDateTime().toString("hh:mm:ss");
+}
+
+void MainWindow::triggerEmergencyStop()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastEmergencyStopMs < 150) {
+        return;
+    }
+
+    m_lastEmergencyStopMs = now;
+    on_btn_emergency_stop_clicked();
 }
 
 
