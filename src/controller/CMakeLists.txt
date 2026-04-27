@@ -18,6 +18,8 @@ set(CONTROLLER_SOURCES
     CameraGridWidget.h
     CO2DisplayWidget.cpp
     CO2DisplayWidget.h
+    ControlPanelWidget.cpp
+    ControlPanelWidget.h
     GamepadDisplayWidget.cpp
     GamepadDisplayWidget.h
     DisplayLayoutManager.cpp

@@ -10,7 +10,7 @@
 #include "src/controller/controller.h"
 #include "src/controller/KeyboardController.h"
 #include "src/controller/CameraGridWidget.h"
-#include "src/controller/GamepadDisplayWidget.h"
+#include "src/controller/ControlPanelWidget.h"
 #include "src/controller/handlekey.h"
 #include "src/controller/RobotAttitudeWidget.h"
 #include "src/controller/TelemetryPanelWidget.h"
@@ -123,8 +123,8 @@ private:
     // 遥测状态面板
     TelemetryPanelWidget* m_telemetryPanel;
 
-    // 手柄显示控件
-    GamepadDisplayWidget* m_gamepadWidget;
+    // 控制面板
+    ControlPanelWidget* m_controlPanel;
 
     // 手柄输入驱动
     HandleKey* m_handleKey;

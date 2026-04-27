@@ -37,7 +37,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_keyboardController(nullptr)
     , m_cameraGridWidget(nullptr)
     , m_telemetryPanel(nullptr)
-    , m_gamepadWidget(nullptr)
+    , m_controlPanel(nullptr)
     , m_handleKey(nullptr)
 {
     ui->setupUi(this);
@@ -120,22 +120,13 @@ void MainWindow::setupDisplayLayout()
     m_telemetryPanel = new TelemetryPanelWidget();
     m_cameraGridWidget->setAuxiliaryWidget(m_telemetryPanel);
 
-    // 创建手柄显示控件，放到姿态模型右侧
-    m_gamepadWidget = new GamepadDisplayWidget();
-    m_gamepadWidget->setMaximumWidth(200);
-
-    // 手柄 + 下方预留空容器，垂直堆叠
-    QWidget *gamepadColumn = new QWidget();
-    QVBoxLayout *gamepadColumnLayout = new QVBoxLayout(gamepadColumn);
-    gamepadColumnLayout->setContentsMargins(0, 0, 0, 0);
-    gamepadColumnLayout->setSpacing(3);
-    gamepadColumnLayout->addWidget(m_gamepadWidget);
-
-    QWidget *reservedPanel = new QWidget();
-    gamepadColumnLayout->addWidget(reservedPanel);
-
-    gamepadColumn->setMaximumWidth(200);
-    ui->horizontalLayout_model_gamepad->addWidget(gamepadColumn);
+    m_controlPanel = new ControlPanelWidget();
+    m_controlPanel->setMaximumWidth(260);
+    connect(m_controlPanel, &ControlPanelWidget::gamepadConnectRequested,
+            this, &MainWindow::on_btn_gamepad_connect_clicked);
+    connect(m_controlPanel, &ControlPanelWidget::emergencyStopRequested,
+            this, &MainWindow::triggerEmergencyStop);
+    ui->horizontalLayout_model_gamepad->addWidget(m_controlPanel);
 
     ui->group_cameras->layout()->addWidget(m_cameraGridWidget);
 
@@ -342,6 +333,9 @@ void MainWindow::updateMotorMode(const QString& mode)
 {
     m_motorMode = mode;
     ui->label_mode_value->setText(mode);
+    if (m_controlPanel) {
+        m_controlPanel->setModeText(mode);
+    }
     if (m_telemetryPanel) {
         m_telemetryPanel->setModeText(mode);
     }
@@ -528,6 +522,9 @@ void MainWindow::on_action_reset_layout_triggered()
         m_telemetryPanel->setModeText(m_controlMode == ControlMode::Vehicle ? "车体运动" : "机械臂操控");
         m_telemetryPanel->setErrorCount(m_errorCount);
     }
+    if (m_controlPanel) {
+        m_controlPanel->setModeText(m_controlMode == ControlMode::Vehicle ? "车体运动" : "机械臂操控");
+    }
 
     update();
 
@@ -711,6 +708,9 @@ void MainWindow::updateGamepadDisplay()
     ui->label_gamepad_value->setText(statusText);
     ui->label_gamepad_value->setStyleSheet(styleSheet);
     ui->btn_gamepad_connect->setText(connected ? "断开手柄" : "连接手柄");
+    if (m_controlPanel) {
+        m_controlPanel->setGamepadConnected(connected);
+    }
     if (m_telemetryPanel) {
         m_telemetryPanel->setGamepadConnected(connected);
     }
@@ -1165,7 +1165,7 @@ void MainWindow::onCameraInfoReceived(int cameraId, bool online, const QString &
 void MainWindow::onGamepadStateReceived(const ControllerState &state)
 {
     // === 1. 更新 GamepadDisplayWidget 显示 ===
-    if (m_gamepadWidget) {
+    if (m_controlPanel) {
         // 摇杆归一化到 -1.0 ~ 1.0
         float lx = state.sThumbLX / 32767.0f;
         float ly = state.sThumbLY / 32767.0f;
@@ -1174,22 +1174,22 @@ void MainWindow::onGamepadStateReceived(const ControllerState &state)
         float lt = state.bLeftTrigger / 255.0f;
         float rt = state.bRightTrigger / 255.0f;
 
-        m_gamepadWidget->updateAll(lx, ly, rx, ry, lt, rt);
+        m_controlPanel->updateGamepadAxes(lx, ly, rx, ry, lt, rt);
 
         // 按钮状态显示
-        if (state.buttonA) m_gamepadWidget->updateButton("A", true);
-        else if (state.buttonB) m_gamepadWidget->updateButton("B", true);
-        else if (state.buttonX) m_gamepadWidget->updateButton("X", true);
-        else if (state.buttonY) m_gamepadWidget->updateButton("Y", true);
-        else if (state.leftShoulder) m_gamepadWidget->updateButton("LB", true);
-        else if (state.rightShoulder) m_gamepadWidget->updateButton("RB", true);
-        else if (state.buttonBack) m_gamepadWidget->updateButton("Back", true);
-        else if (state.buttonStart) m_gamepadWidget->updateButton("Start", true);
-        else if (state.dpadUp) m_gamepadWidget->updateButton("DPad↑", true);
-        else if (state.dpadDown) m_gamepadWidget->updateButton("DPad↓", true);
-        else if (state.dpadLeft) m_gamepadWidget->updateButton("DPad←", true);
-        else if (state.dpadRight) m_gamepadWidget->updateButton("DPad→", true);
-        else m_gamepadWidget->updateButton("--", false);
+        if (state.buttonA) m_controlPanel->updateGamepadButton("A", true);
+        else if (state.buttonB) m_controlPanel->updateGamepadButton("B", true);
+        else if (state.buttonX) m_controlPanel->updateGamepadButton("X", true);
+        else if (state.buttonY) m_controlPanel->updateGamepadButton("Y", true);
+        else if (state.leftShoulder) m_controlPanel->updateGamepadButton("LB", true);
+        else if (state.rightShoulder) m_controlPanel->updateGamepadButton("RB", true);
+        else if (state.buttonBack) m_controlPanel->updateGamepadButton("Back", true);
+        else if (state.buttonStart) m_controlPanel->updateGamepadButton("Start", true);
+        else if (state.dpadUp) m_controlPanel->updateGamepadButton("DPad↑", true);
+        else if (state.dpadDown) m_controlPanel->updateGamepadButton("DPad↓", true);
+        else if (state.dpadLeft) m_controlPanel->updateGamepadButton("DPad←", true);
+        else if (state.dpadRight) m_controlPanel->updateGamepadButton("DPad→", true);
+        else m_controlPanel->updateGamepadButton("--", false);
     }
 
     // === 2. D-Pad检测模式切换 ===
@@ -1217,6 +1217,9 @@ void MainWindow::switchControlMode(ControlMode mode)
 
     QString modeName = (mode == ControlMode::Vehicle) ? "车体运动" : "机械臂操控";
     ui->label_mode_value->setText(modeName);
+    if (m_controlPanel) {
+        m_controlPanel->setModeText(modeName);
+    }
     if (m_telemetryPanel) {
         m_telemetryPanel->setModeText(modeName);
     }
