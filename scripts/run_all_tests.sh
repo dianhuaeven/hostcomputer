@@ -18,6 +18,9 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$REPORT"; }
 log "A1) smoke test"
 BUILD_DIR="$BUILD_DIR" "$ROOT/scripts/smoke_test.sh" | tee -a "$REPORT"
 
+log "A1.5) protocol smoke test"
+python3 "$ROOT/scripts/protocol_smoke_test.py" | tee -a "$REPORT"
+
 if [[ "$RUN_RUNTIME_TESTS" != "1" ]]; then
   log "A2-A4) runtime tests skipped; set RUN_RUNTIME_TESTS=1 to enable GUI restart/fuzz/stress checks"
 else
