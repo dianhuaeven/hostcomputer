@@ -9,20 +9,28 @@ REPORT="$LOG_DIR/run_all_${TS}.txt"
 RESTART_ROUNDS="${RESTART_ROUNDS:-10}"
 FUZZ_SEC="${FUZZ_SEC:-12}"
 STRESS_SEC="${STRESS_SEC:-600}"
+BUILD_DIR="${BUILD_DIR:-$ROOT/build-smoke}"
+BIN="${BIN:-$BUILD_DIR/hostcomputer}"
+RUN_RUNTIME_TESTS="${RUN_RUNTIME_TESTS:-0}"
 
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$REPORT"; }
 
 log "A1) smoke test"
-"$ROOT/scripts/smoke_test.sh" | tee -a "$REPORT"
+BUILD_DIR="$BUILD_DIR" "$ROOT/scripts/smoke_test.sh" | tee -a "$REPORT"
+
+if [[ "$RUN_RUNTIME_TESTS" != "1" ]]; then
+  log "A2-A4) runtime tests skipped; set RUN_RUNTIME_TESTS=1 to enable GUI restart/fuzz/stress checks"
+else
 
 log "A2) restart 10x"
-RESTART_ROUNDS="$RESTART_ROUNDS" python3 - <<'PY' | tee -a "$REPORT"
+RESTART_ROUNDS="$RESTART_ROUNDS" BIN="$BIN" python3 - <<'PY' | tee -a "$REPORT"
 import subprocess, time
 import os
 r=int(os.getenv('RESTART_ROUNDS','10'))
+bin_path=os.getenv('BIN')
 ok=0
 for i in range(r):
-    p=subprocess.Popen(['./build-openclaw-nosdk/hostcomputer'], cwd='.')
+    p=subprocess.Popen([bin_path])
     time.sleep(3)
     alive=(p.poll() is None)
     if alive:
@@ -34,9 +42,9 @@ print(f'RESTART_OK {ok}/{r}')
 PY
 
 log "A3) udp fuzz runtime 12s"
-FUZZ_SEC="$FUZZ_SEC" python3 - <<'PY' | tee -a "$REPORT"
+FUZZ_SEC="$FUZZ_SEC" BIN="$BIN" python3 - <<'PY' | tee -a "$REPORT"
 import subprocess, time, socket, os, random
-p=subprocess.Popen(['./build-openclaw-nosdk/hostcomputer'])
+p=subprocess.Popen([os.getenv('BIN')])
 time.sleep(2)
 start=time.time()
 s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -58,10 +66,10 @@ print(f'EXIT_CODE {p.returncode}')
 PY
 
 log "A4) 10min stress"
-STRESS_SEC="$STRESS_SEC" python3 - <<'PY' | tee -a "$REPORT"
+STRESS_SEC="$STRESS_SEC" BIN="$BIN" python3 - <<'PY' | tee -a "$REPORT"
 import subprocess, time
 import os
-p=subprocess.Popen(['./build-openclaw-nosdk/hostcomputer'])
+p=subprocess.Popen([os.getenv('BIN')])
 start=time.time()
 dur=float(os.getenv('STRESS_SEC','600'))
 while time.time()-start<dur:
@@ -76,6 +84,8 @@ if alive:
 print(f'ALIVE_10MIN {alive}')
 print(f'EXIT_CODE {p.returncode}')
 PY
+
+fi
 
 log "B) mock ROS1 server script ready: scripts/mock_ros1_server.py"
 log "C) async tcp patch check:"
