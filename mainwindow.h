@@ -10,10 +10,10 @@
 #include "src/controller/controller.h"
 #include "src/controller/KeyboardController.h"
 #include "src/controller/CameraGridWidget.h"
-#include "src/controller/CO2DisplayWidget.h"
 #include "src/controller/GamepadDisplayWidget.h"
 #include "src/controller/handlekey.h"
 #include "src/controller/RobotAttitudeWidget.h"
+#include "src/controller/TelemetryPanelWidget.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -120,8 +120,8 @@ private:
     // 摄像头网格
     CameraGridWidget* m_cameraGridWidget;
 
-    // CO2显示控件
-    CO2DisplayWidget* m_co2Widget;
+    // 遥测状态面板
+    TelemetryPanelWidget* m_telemetryPanel;
 
     // 手柄显示控件
     GamepadDisplayWidget* m_gamepadWidget;

@@ -36,7 +36,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_controller(nullptr)
     , m_keyboardController(nullptr)
     , m_cameraGridWidget(nullptr)
-    , m_co2Widget(nullptr)
+    , m_telemetryPanel(nullptr)
     , m_gamepadWidget(nullptr)
     , m_handleKey(nullptr)
 {
@@ -117,19 +117,8 @@ void MainWindow::setupDisplayLayout()
 {
     m_cameraGridWidget = new CameraGridWidget(this);
 
-    // 索引5：垂直堆叠容器，CO2置顶，剩余空间留给后续控件
-    QWidget *statusPanel = new QWidget();
-    QVBoxLayout *statusLayout = new QVBoxLayout(statusPanel);
-    statusLayout->setContentsMargins(0, 0, 0, 0);
-    statusLayout->setSpacing(3);
-
-    m_co2Widget = new CO2DisplayWidget();
-    m_co2Widget->setMaximumHeight(120);
-    statusLayout->addWidget(m_co2Widget);
-
-    statusLayout->addStretch();
-
-    m_cameraGridWidget->setAuxiliaryWidget(statusPanel);
+    m_telemetryPanel = new TelemetryPanelWidget();
+    m_cameraGridWidget->setAuxiliaryWidget(m_telemetryPanel);
 
     // 创建手柄显示控件，放到姿态模型右侧
     m_gamepadWidget = new GamepadDisplayWidget();
@@ -289,7 +278,11 @@ void MainWindow::updateHeartbeatStatus(bool online)
 void MainWindow::updateFPS(int fps)
 {
     m_currentFPS = fps;
-    ui->label_fps_value->setText(QString("%1 FPS").arg(fps));
+    const QString fpsText = QString("%1 FPS").arg(fps);
+    ui->label_fps_value->setText(fpsText);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setFps(fps);
+    }
 }
 
 void MainWindow::updateBandwidthAndPacketLoss()
@@ -297,6 +290,9 @@ void MainWindow::updateBandwidthAndPacketLoss()
     if (!m_controller || !m_controller->isTcpConnected()) {
         ui->label_cpu->setText("带宽压力:");
         ui->label_cpu_value->setText("N/A");
+        if (m_telemetryPanel) {
+            m_telemetryPanel->setBandwidthText("N/A");
+        }
         return;
     }
 
@@ -335,13 +331,20 @@ void MainWindow::updateBandwidthAndPacketLoss()
     if (deltaSent > 0 && deltaSent > deltaReceived) {
         lossRate = (double)(deltaSent - deltaReceived) / deltaSent * 100.0;
     }
-    ui->label_cpu_value->setText(QString("%1 | 丢包: %2%").arg(pressure).arg(lossRate, 0, 'f', 1));
+    const QString bandwidthText = QString("%1 | 丢包: %2%").arg(pressure).arg(lossRate, 0, 'f', 1);
+    ui->label_cpu_value->setText(bandwidthText);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setBandwidthText(bandwidthText);
+    }
 }
 
 void MainWindow::updateMotorMode(const QString& mode)
 {
     m_motorMode = mode;
     ui->label_mode_value->setText(mode);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setModeText(mode);
+    }
     addCommand(QString("[系统] 电机模式切换: %1").arg(mode));
 }
 
@@ -355,6 +358,9 @@ void MainWindow::addError(const QString& error)
     m_errorCount++;
     formatAndAddError(error);
     ui->label_error_count->setText(QString("错误: %1").arg(m_errorCount));
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setErrorCount(m_errorCount);
+    }
 }
 
 void MainWindow::updateCarAttitude(double roll, double pitch, double yaw)
@@ -517,6 +523,11 @@ void MainWindow::on_action_reset_layout_triggered()
     ui->label_fps_value->setText(QString::number(m_currentFPS) + " FPS");
     ui->label_mode_value->setText(m_controlMode == ControlMode::Vehicle ? "车体运动" : "机械臂操控");
     ui->label_error_count->setText(QString("错误: %1").arg(m_errorCount));
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setFps(m_currentFPS);
+        m_telemetryPanel->setModeText(m_controlMode == ControlMode::Vehicle ? "车体运动" : "机械臂操控");
+        m_telemetryPanel->setErrorCount(m_errorCount);
+    }
 
     update();
 
@@ -579,6 +590,9 @@ void MainWindow::on_btn_clear_errors_clicked()
     ui->text_errors->clear();
     m_errorCount = 0;
     ui->label_error_count->setText("错误: 0");
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setErrorCount(0);
+    }
     addCommand("[系统] 错误记录已清空");
 }
 
@@ -667,6 +681,9 @@ void MainWindow::updateConnectionDisplay()
 
     ui->label_connection_value->setText(statusText);
     ui->label_connection_value->setStyleSheet(styleSheet);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setConnectionStatus(m_isConnected);
+    }
 }
 
 void MainWindow::updateHeartbeatDisplay()
@@ -678,6 +695,9 @@ void MainWindow::updateHeartbeatDisplay()
 
     ui->label_heartbeat_value->setText(statusText);
     ui->label_heartbeat_value->setStyleSheet(styleSheet);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setHeartbeatStatus(m_heartbeatOnline);
+    }
 }
 
 void MainWindow::updateGamepadDisplay()
@@ -691,6 +711,9 @@ void MainWindow::updateGamepadDisplay()
     ui->label_gamepad_value->setText(statusText);
     ui->label_gamepad_value->setStyleSheet(styleSheet);
     ui->btn_gamepad_connect->setText(connected ? "断开手柄" : "连接手柄");
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setGamepadConnected(connected);
+    }
 }
 
 void MainWindow::formatAndAddCommand(const QString& command)
@@ -1114,8 +1137,8 @@ void MainWindow::onMotorStateReceived(const Communication::MotorState &state)
 
 void MainWindow::onCO2DataReceived(float ppm)
 {
-    if (m_co2Widget) {
-        m_co2Widget->setCO2Value(ppm);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setCO2Value(ppm);
     }
 }
 
@@ -1194,6 +1217,9 @@ void MainWindow::switchControlMode(ControlMode mode)
 
     QString modeName = (mode == ControlMode::Vehicle) ? "车体运动" : "机械臂操控";
     ui->label_mode_value->setText(modeName);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setModeText(modeName);
+    }
     addCommand(QString("[模式切换] %1").arg(modeName));
 
     // 同步通知键盘控制器

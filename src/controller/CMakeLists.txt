@@ -32,6 +32,8 @@ set(CONTROLLER_SOURCES
     RobotAttitudeWidget.h
     RobotViewModel.cpp
     RobotViewModel.h
+    TelemetryPanelWidget.cpp
+    TelemetryPanelWidget.h
 )
 
 # 创建静态库
