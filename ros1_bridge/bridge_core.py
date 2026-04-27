@@ -1,6 +1,7 @@
 import threading
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
+from debug_events import EventSink, NullEventSink
 from bridge_protocol import MAX_FRAME_BYTES, PROTOCOL_VERSION, clamp, now_ms
 from bridge_state import BridgeState, TwistCommand
 from output_adapters import OutputAdapter
@@ -14,8 +15,10 @@ class BridgeCore:
         linear_speed: float,
         angular_speed: float,
         cameras: Optional[List[Dict[str, Any]]] = None,
+        events: Optional[EventSink] = None,
     ) -> None:
         self.output = output
+        self.events = events or NullEventSink()
         self.watchdog_ms = watchdog_ms
         self.linear_speed = linear_speed
         self.angular_speed = angular_speed
@@ -160,16 +163,20 @@ class BridgeCore:
     def handle_message(self, msg: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
         msg_type = str(msg.get("type", ""))
         seq = int(msg.get("seq", 0) or 0)
+        self.events.emit("protocol", "message received", data={"type": msg_type, "seq": seq})
 
         if not msg_type:
+            self.events.emit("protocol", "missing message type", level="error", data={"seq": seq})
             yield self.make_protocol_error(msg, 2101, "missing type")
             return
 
         if msg.get("protocol_version", PROTOCOL_VERSION) != PROTOCOL_VERSION:
+            self.events.emit("protocol", "unsupported protocol version", level="error", data={"seq": seq})
             yield self.make_protocol_error(msg, 2103, "unsupported protocol_version")
             return
 
         if msg_type == "heartbeat":
+            self.events.emit("protocol", "heartbeat ack", data={"seq": seq})
             yield {
                 "type": "heartbeat_ack",
                 "protocol_version": PROTOCOL_VERSION,
@@ -180,10 +187,12 @@ class BridgeCore:
             return
 
         if msg_type in ("sync_request", "system_snapshot_request"):
+            self.events.emit("sync", "system snapshot requested", data={"seq": seq})
             yield self.make_system_snapshot(seq)
             return
 
         if msg_type == "camera_list_request":
+            self.events.emit("camera", "camera list requested", data={"seq": seq, "count": len(self.cameras)})
             yield self.make_camera_list_response(seq)
             return
 
@@ -199,6 +208,10 @@ class BridgeCore:
                 self.state.emergency_active = True
                 self.state.emergency_source = source
                 self.state.watchdog_active = False
+            self.events.emit("emergency", "emergency stop accepted", level="warning", data={
+                "seq": seq,
+                "source": source,
+            })
             self.publish_zero("emergency_stop")
             yield self.make_ack(msg, True, 0, "emergency active")
             yield self.make_emergency_state("emergency active")
@@ -208,6 +221,7 @@ class BridgeCore:
             with self.state_lock:
                 self.state.emergency_active = False
                 self.state.emergency_source = ""
+            self.events.emit("emergency", "emergency cleared", data={"seq": seq})
             yield self.make_ack(msg, True, 0, "emergency cleared")
             yield self.make_emergency_state("emergency cleared")
             return
@@ -218,12 +232,17 @@ class BridgeCore:
                 with self.state_lock:
                     self.state.emergency_active = False
                     self.state.emergency_source = ""
+                self.events.emit("emergency", "emergency cleared", data={"seq": seq, "via": "system_command"})
                 yield self.make_ack(msg, True, 0, "emergency cleared")
                 yield self.make_emergency_state("emergency cleared")
             else:
                 yield self.make_ack(msg, True, 0, f"system command {command} accepted")
             return
 
+        self.events.emit("protocol", "unsupported message type", level="warning", data={
+            "seq": seq,
+            "type": msg_type,
+        })
         yield self.make_protocol_error(msg, 1001, f"unsupported message type: {msg_type}")
 
     def handle_operator_input(self, msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -234,9 +253,11 @@ class BridgeCore:
 
         with self.state_lock:
             if seq <= self.state.last_operator_seq:
+                self.events.emit("operator_input", "operator input dropped old seq", level="warning", data={"seq": seq})
                 return self.input_status(seq, "dropped_old_seq")
             if ttl_ms > 0 and timestamp > 0 and current_ms > timestamp + ttl_ms:
                 self.state.last_operator_seq = seq
+                self.events.emit("operator_input", "operator input dropped expired", level="warning", data={"seq": seq})
                 return self.input_status(seq, "dropped_expired")
             if self.state.emergency_active:
                 self.state.last_operator_seq = seq
@@ -246,6 +267,7 @@ class BridgeCore:
 
         if should_publish_zero:
             self.publish_zero("emergency_active")
+            self.events.emit("operator_input", "operator input ignored emergency", level="warning", data={"seq": seq})
             return self.input_status(seq, "ignored_emergency")
 
         twist = self.operator_input_to_twist(msg)
@@ -255,6 +277,16 @@ class BridgeCore:
             self.state.watchdog_active = False
             self.state.control_mode = str(msg.get("mode", self.state.control_mode))
         self.publish_twist(twist)
+        self.events.emit("operator_input", "operator input accepted", data={
+            "seq": seq,
+            "mode": msg.get("mode", "unknown"),
+            "cmd_vel": {
+                "linear_x": twist.linear_x,
+                "angular_z": twist.angular_z,
+                "source": twist.source,
+            },
+            "pressed_keys": msg.get("keyboard", {}).get("pressed_keys", []),
+        })
         return self.input_status(seq, "accepted")
 
     def input_status(self, seq: int, status: str) -> Dict[str, Any]:
@@ -327,6 +359,7 @@ class BridgeCore:
         if not emit_status:
             return []
         self.publish_zero("watchdog_timeout")
+        self.events.emit("watchdog", "operator input watchdog timeout", level="warning", data={"seq": seq})
         return [self.input_status(seq, "watchdog_timeout")]
 
 

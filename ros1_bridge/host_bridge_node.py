@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from bridge_core import BridgeCore, BridgeRuntime
 from bridge_protocol import DEFAULT_WATCHDOG_MS, MAX_FRAME_BYTES, PROTOCOL_VERSION
 from bridge_protocol import json_line
+from debug_events import EventSink, RingBufferEventSink
 from output_adapters import DryRunOutput, OutputAdapter, RosOutput
 
 
@@ -21,13 +22,15 @@ class HostBridgeServer:
         linear_speed: float = 0.6,
         angular_speed: float = 1.0,
         cameras: Optional[List[Dict[str, Any]]] = None,
+        events: Optional[EventSink] = None,
     ) -> None:
         self.host = host
         self.port = port
         self.stop_event = threading.Event()
         self.client_lock = threading.Lock()
         self.active_clients: List["BridgeClient"] = []
-        self.core = BridgeCore(output, watchdog_ms, linear_speed, angular_speed, cameras)
+        self.events = events or RingBufferEventSink()
+        self.core = BridgeCore(output, watchdog_ms, linear_speed, angular_speed, cameras, self.events)
         self.runtime = BridgeRuntime(self.core, self.broadcast)
 
     def serve_forever(self) -> None:
@@ -37,6 +40,7 @@ class HostBridgeServer:
             server.bind((self.host, self.port))
             server.listen(5)
             print(f"[bridge] listening on {self.host}:{self.port}", flush=True)
+            self.events.emit("tcp", "bridge listening", data={"host": self.host, "port": self.port})
             while not self.stop_event.is_set():
                 try:
                     conn, addr = server.accept()
@@ -70,6 +74,7 @@ class BridgeClient:
 
     def run(self) -> None:
         print(f"[bridge] client connected: {self.addr}", flush=True)
+        self.server.events.emit("tcp", "client connected", data={"addr": f"{self.addr[0]}:{self.addr[1]}"})
         self.conn.settimeout(1.0)
         try:
             self.send_json(self.server.core.make_hello())
@@ -82,6 +87,7 @@ class BridgeClient:
             except OSError:
                 pass
             self.server.remove_client(self)
+            self.server.events.emit("tcp", "client disconnected", data={"addr": f"{self.addr[0]}:{self.addr[1]}"})
             print(f"[bridge] client disconnected: {self.addr}", flush=True)
 
     def send_json(self, payload: Dict[str, Any]) -> None:
@@ -108,6 +114,7 @@ class BridgeClient:
 
             buffer += chunk
             if len(buffer) > MAX_FRAME_BYTES and b"\n" not in buffer:
+                self.server.events.emit("protocol", "frame exceeds max length", level="error")
                 self.send_json(self.server.core.make_protocol_error({}, 2001, "TCP frame exceeds max length"))
                 break
 
@@ -116,6 +123,7 @@ class BridgeClient:
                 if not line.strip():
                     continue
                 if len(line) > MAX_FRAME_BYTES:
+                    self.server.events.emit("protocol", "line exceeds max length", level="error")
                     self.send_json(self.server.core.make_protocol_error({}, 2001, "TCP frame exceeds max length"))
                     return
                 try:
@@ -123,6 +131,7 @@ class BridgeClient:
                     if not isinstance(msg, dict):
                         raise ValueError("JSON frame is not an object")
                 except Exception as exc:
+                    self.server.events.emit("protocol", "invalid JSON", level="error", data={"error": str(exc)})
                     self.send_json(self.server.core.make_protocol_error({}, 2100, f"invalid JSON: {exc}"))
                     continue
 
@@ -172,10 +181,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    events = RingBufferEventSink()
     if args.ros:
-        output: OutputAdapter = RosOutput("host_bridge_node", args.cmd_vel_topic)
+        output: OutputAdapter = RosOutput("host_bridge_node", args.cmd_vel_topic, events)
     else:
-        output = DryRunOutput()
+        output = DryRunOutput(events)
 
     server = HostBridgeServer(
         host=args.host,
@@ -185,6 +195,7 @@ def main() -> None:
         linear_speed=args.linear_speed,
         angular_speed=args.angular_speed,
         cameras=args.camera,
+        events=events,
     )
     try:
         server.serve_forever()
