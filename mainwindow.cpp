@@ -1281,11 +1281,7 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
                                  .arg(active ? "ACTIVE" : "CLEAR")
                                  .arg(source)
                                  .arg(text);
-        if (active) {
-            addError(line);
-        } else {
-            addCommand(line);
-        }
+        addCommand(line);
         return;
     }
 
