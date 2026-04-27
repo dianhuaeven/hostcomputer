@@ -188,8 +188,133 @@ def main() -> None:
             })
             accepted = client.recv_status("accepted")
             assert accepted["last_operator_input_seq"] == 4
+            assert accepted["control_mode"] == "vehicle"
+            assert accepted["speed_level"] == 2
             assert accepted["cmd_vel"]["linear_x"] > 0
             assert accepted["cmd_vel"]["angular_z"] < 0
+
+            client.send({
+                "type": "operator_input",
+                "protocol_version": 1,
+                "seq": 5,
+                "timestamp_ms": now_ms(),
+                "ttl_ms": 500,
+                "mode": "vehicle",
+                "keyboard": {"pressed_keys": ["8"]},
+                "gamepad": {"connected": False, "buttons": {}, "axes": {}},
+            })
+            speed_status = client.recv_status("accepted")
+            assert speed_status["last_operator_input_seq"] == 5
+            assert speed_status["speed_level"] == 3
+
+            client.send({
+                "type": "operator_input",
+                "protocol_version": 1,
+                "seq": 6,
+                "timestamp_ms": now_ms(),
+                "ttl_ms": 500,
+                "mode": "vehicle",
+                "keyboard": {"pressed_keys": ["1"]},
+                "gamepad": {"connected": False, "buttons": {}, "axes": {}},
+            })
+            arm_mode = client.recv_status("accepted")
+            assert arm_mode["last_operator_input_seq"] == 6
+            assert arm_mode["control_mode"] == "arm"
+            assert arm_mode["cmd_vel"]["linear_x"] == 0.0
+            assert arm_mode["servo"]["frame_id"] == "catch_camera"
+
+            client.send({
+                "type": "operator_input",
+                "protocol_version": 1,
+                "seq": 7,
+                "timestamp_ms": now_ms(),
+                "ttl_ms": 500,
+                "mode": "vehicle",
+                "keyboard": {"pressed_keys": ["w", "d", "u", "i", "q", "f"]},
+                "gamepad": {"connected": False, "buttons": {}, "axes": {}},
+            })
+            arm_move = client.recv_status("accepted")
+            assert arm_move["last_operator_input_seq"] == 7
+            assert arm_move["control_mode"] == "arm"
+            assert arm_move["cmd_vel"]["linear_x"] == 0.0
+            assert arm_move["servo"]["linear_x"] > 0
+            assert arm_move["servo"]["linear_y"] < 0
+            assert arm_move["servo"]["linear_z"] > 0
+            assert arm_move["servo"]["angular_x"] > 0
+            assert arm_move["servo"]["angular_y"] < 0
+
+            client.send({
+                "type": "operator_input",
+                "protocol_version": 1,
+                "seq": 8,
+                "timestamp_ms": now_ms(),
+                "ttl_ms": 500,
+                "mode": "vehicle",
+                "keyboard": {"pressed_keys": ["1"]},
+                "gamepad": {"connected": False, "buttons": {}, "axes": {}},
+            })
+            vehicle_mode = client.recv_status("accepted")
+            assert vehicle_mode["last_operator_input_seq"] == 8
+            assert vehicle_mode["control_mode"] == "vehicle"
+
+            client.send({
+                "type": "operator_input",
+                "protocol_version": 1,
+                "seq": 9,
+                "timestamp_ms": now_ms(),
+                "ttl_ms": 500,
+                "mode": "vehicle",
+                "keyboard": {"pressed_keys": ["w", "d"]},
+                "gamepad": {"connected": False, "buttons": {}, "axes": {}},
+            })
+            vehicle_move = client.recv_status("accepted")
+            assert vehicle_move["last_operator_input_seq"] == 9
+            assert vehicle_move["control_mode"] == "vehicle"
+            assert abs(vehicle_move["cmd_vel"]["linear_x"] - 0.55) < 1e-6
+            assert abs(vehicle_move["cmd_vel"]["angular_z"] + 1.0) < 1e-6
+
+            client.send({
+                "type": "operator_input",
+                "protocol_version": 1,
+                "seq": 10,
+                "timestamp_ms": now_ms(),
+                "ttl_ms": 500,
+                "mode": "vehicle",
+                "keyboard": {"pressed_keys": ["space"]},
+                "gamepad": {"connected": False, "buttons": {}, "axes": {}},
+            })
+            emergency_key = client.recv_status("emergency_key")
+            assert emergency_key["last_operator_input_seq"] == 10
+            assert emergency_key["emergency_active"] is True
+            emergency_from_space = client.recv_until("emergency_state")
+            assert emergency_from_space["active"] is True
+            assert emergency_from_space["source"] == "keyboard_space"
+
+            client.send({
+                "type": "clear_emergency",
+                "protocol_version": 1,
+                "seq": 11,
+                "timestamp_ms": now_ms(),
+            })
+            clear_ack = client.recv_until("ack")
+            assert clear_ack["seq"] == 11
+            assert clear_ack["ack_type"] == "clear_emergency"
+            cleared = client.recv_until("emergency_state")
+            assert cleared["active"] is False
+
+            client.send({
+                "type": "operator_input",
+                "protocol_version": 1,
+                "seq": 12,
+                "timestamp_ms": now_ms(),
+                "ttl_ms": 500,
+                "mode": "vehicle",
+                "keyboard": {"pressed_keys": ["w", "d"]},
+                "gamepad": {"connected": False, "buttons": {}, "axes": {}},
+            })
+            resumed = client.recv_status("accepted")
+            assert resumed["last_operator_input_seq"] == 12
+            assert resumed["emergency_active"] is False
 
             watchdog = client.recv_status("watchdog_timeout", timeout=1.0)
             assert watchdog["watchdog_active"] is True
@@ -199,12 +324,12 @@ def main() -> None:
             client.send({
                 "type": "emergency_stop",
                 "protocol_version": 1,
-                "seq": 5,
+                "seq": 13,
                 "timestamp_ms": now_ms(),
                 "params": {"source": "bridge_loopback"},
             })
             ack = client.recv_until("ack")
-            assert ack["seq"] == 5
+            assert ack["seq"] == 13
             assert ack["ack_type"] == "emergency_stop"
             assert ack["ok"] is True
             emergency = client.recv_until("emergency_state")
@@ -213,7 +338,7 @@ def main() -> None:
             client.send({
                 "type": "operator_input",
                 "protocol_version": 1,
-                "seq": 6,
+                "seq": 14,
                 "timestamp_ms": now_ms(),
                 "ttl_ms": 500,
                 "mode": "vehicle",
@@ -225,7 +350,7 @@ def main() -> None:
 
             state = get_json("/api/state")["state"]
             assert state["emergency_active"] is True
-            assert state["last_operator_seq"] == 6
+            assert state["last_operator_seq"] == 14
             assert state["last_twist"]["linear_x"] == 0.0
 
             cameras_api = get_json("/api/cameras")

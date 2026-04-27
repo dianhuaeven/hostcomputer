@@ -123,7 +123,7 @@ QString KeyboardController::protocolKeyName(int key) const
     }
 
     if (key >= Qt::Key_0 && key <= Qt::Key_9) {
-        return QStringLiteral("num_%1").arg(key - Qt::Key_0);
+        return QString::number(key - Qt::Key_0);
     }
     if (key >= Qt::Key_A && key <= Qt::Key_Z) {
         return QString(QChar(static_cast<char>('a' + key - Qt::Key_A)));

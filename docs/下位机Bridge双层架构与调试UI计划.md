@@ -44,7 +44,11 @@ Core 负责“把上位机协议变成下位机行为”：
   - 丢弃过期 `ttl_ms`。
   - 急停状态下忽略普通运动输入。
   - 解析键盘和手柄输入。
-  - 生成 `TwistCommand`。
+  - 键盘按 `1` 在车体/机械臂模式之间切换。
+  - 键盘按 `6` / `7` / `8` / `9` / `0` 设置 1-5 档速度。
+  - 车体模式按 `w/s/a/d` 生成 `/cmd_vel`。
+  - 机械臂模式按 `w/s/a/d/u/o/q/e/i/k/j/l` 生成 `/servo_server/delta_twist_cmds`，按 `f/h` 调整夹爪位置。
+  - 生成 `TwistCommand`、`ServoCommand` 和可选 `GripperCommand`。
   - 通过 OutputAdapter 输出。
 - 处理 `emergency_stop`：
   - 进入急停状态。
@@ -60,10 +64,12 @@ Core 负责“把上位机协议变成下位机行为”：
 Adapter 只执行 Core 给出的输出动作：
 
 - `DryRunOutput`
-  - 打印/记录 `/cmd_vel` 意图。
+  - 打印/记录 `/cmd_vel`、servo 和夹爪意图。
   - 用于本机回环和自动化测试。
 - `RosOutput`
   - 发布 `geometry_msgs/Twist` 到 `/cmd_vel`。
+  - 发布 `geometry_msgs/TwistStamped` 到 `/servo_server/delta_twist_cmds`。
+  - 发布 `std_msgs/Float64` 到 `/arm_control/gripper_position`。
   - 后续增加 service client：电机初始化、使能、清急停、模式切换等。
 
 Adapter 不解析上位机协议，不维护 ACK，不维护 watchdog。

@@ -20,8 +20,12 @@ class HostBridgeServer:
         port: int,
         output: OutputAdapter,
         watchdog_ms: int = DEFAULT_WATCHDOG_MS,
-        linear_speed: float = 0.6,
-        angular_speed: float = 1.0,
+        linear_speed: float = 0.8,
+        angular_speed: float = 1.5,
+        servo_frame: str = "catch_camera",
+        gripper_min_position: float = 0.0,
+        gripper_max_position: float = 0.044,
+        gripper_initial_position: float = 0.022,
         cameras: Optional[List[Dict[str, Any]]] = None,
         events: Optional[EventSink] = None,
     ) -> None:
@@ -31,7 +35,18 @@ class HostBridgeServer:
         self.client_lock = threading.Lock()
         self.active_clients: List["BridgeClient"] = []
         self.events = events or RingBufferEventSink()
-        self.core = BridgeCore(output, watchdog_ms, linear_speed, angular_speed, cameras, self.events)
+        self.core = BridgeCore(
+            output,
+            watchdog_ms,
+            linear_speed,
+            angular_speed,
+            servo_frame,
+            gripper_min_position,
+            gripper_max_position,
+            gripper_initial_position,
+            cameras,
+            self.events,
+        )
         self.runtime = BridgeRuntime(self.core, self.broadcast)
 
     def serve_forever(self) -> None:
@@ -165,12 +180,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9090)
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true", help="run without ROS and print cmd_vel")
-    mode.add_argument("--ros", action="store_true", help="publish geometry_msgs/Twist with rospy")
+    mode.add_argument("--dry-run", action="store_true", help="run without ROS and print bridge outputs")
+    mode.add_argument("--ros", action="store_true", help="publish ROS control topics with rospy")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel")
+    parser.add_argument("--servo-topic", default="/servo_server/delta_twist_cmds")
+    parser.add_argument("--servo-frame", default="catch_camera")
+    parser.add_argument("--gripper-position-topic", default="/arm_control/gripper_position")
+    parser.add_argument("--gripper-min-position", type=float, default=0.0)
+    parser.add_argument("--gripper-max-position", type=float, default=0.044)
+    parser.add_argument("--gripper-initial-position", type=float, default=0.022)
     parser.add_argument("--watchdog-ms", type=int, default=DEFAULT_WATCHDOG_MS)
-    parser.add_argument("--linear-speed", type=float, default=0.6)
-    parser.add_argument("--angular-speed", type=float, default=1.0)
+    parser.add_argument("--linear-speed", type=float, default=0.8, help="vehicle level-5 linear speed")
+    parser.add_argument("--angular-speed", type=float, default=1.5, help="vehicle level-5 angular speed")
     parser.add_argument("--debug-ui", action="store_true", help="start read-only debug HTTP UI")
     parser.add_argument("--debug-host", default="127.0.0.1")
     parser.add_argument("--debug-port", type=int, default=18080)
@@ -187,7 +208,13 @@ def main() -> None:
     args = build_arg_parser().parse_args()
     events = RingBufferEventSink()
     if args.ros:
-        output: OutputAdapter = RosOutput("host_bridge_node", args.cmd_vel_topic, events)
+        output: OutputAdapter = RosOutput(
+            "host_bridge_node",
+            args.cmd_vel_topic,
+            args.servo_topic,
+            args.gripper_position_topic,
+            events,
+        )
     else:
         output = DryRunOutput(events)
 
@@ -198,6 +225,10 @@ def main() -> None:
         watchdog_ms=args.watchdog_ms,
         linear_speed=args.linear_speed,
         angular_speed=args.angular_speed,
+        servo_frame=args.servo_frame,
+        gripper_min_position=args.gripper_min_position,
+        gripper_max_position=args.gripper_max_position,
+        gripper_initial_position=args.gripper_initial_position,
         cameras=args.camera,
         events=events,
     )

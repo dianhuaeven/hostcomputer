@@ -71,19 +71,26 @@ MVP 映射：
 
 | 协议输入 | ROS 输出 |
 |----------|----------|
-| `operator_input.keyboard.pressed_keys` | `/cmd_vel` |
-| `operator_input.gamepad.axes` | `/cmd_vel` |
+| `operator_input.keyboard.pressed_keys` | `/cmd_vel`、`/servo_server/delta_twist_cmds`、`/arm_control/gripper_position` |
+| `operator_input.gamepad.axes/buttons` | `/cmd_vel`、`/servo_server/delta_twist_cmds` |
 | `emergency_stop` | 零速度 + 急停状态 |
 
 初始键盘映射由 bridge 维护：
 
 | 输入名 | 语义 |
 |--------|------|
-| `w` | 前进 |
-| `s` | 后退 |
-| `a` | 左转 |
-| `d` | 右转 |
-| `shift` | 加速倍率 |
+| `1` | 车体/机械臂模式切换 |
+| `space` | 急停兜底触发；上位机仍应同时发送 `emergency_stop` |
+| `6` / `7` / `8` / `9` / `0` | 五档速度，1 档到 5 档 |
+| 车体 `w` / `s` | 前进 / 后退 |
+| 车体 `a` / `d` | 左转 / 右转 |
+| 机械臂 `w` / `s` | linear z + / - |
+| 机械臂 `a` / `d` | linear y + / - |
+| 机械臂 `u` / `o` | linear x + / - |
+| 机械臂 `q` / `e` | roll + / - |
+| 机械臂 `i` / `k` | pitch - / + |
+| 机械臂 `j` / `l` | yaw + / - |
+| 机械臂 `f` / `h` | 夹爪开 / 关 |
 
 这符合“上位机只发协议层输入名，下位机负责解释运动语义”的设计。
 
