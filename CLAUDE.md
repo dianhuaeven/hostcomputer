@@ -56,7 +56,7 @@ ninja
 
 ### 层级规则
 - **Communication层**：只负责TCP连接和原始JSON收发，不含业务逻辑。通过signal将数据向上传递
-- **Controller层**：协调通信层，提供统一业务接口（`sendVelocityCommand`, `sendJointControl`等）给UI层。也包含自定义UI控件
+- **Controller层**：协调通信层，提供统一业务接口（`sendOperatorInput`, `sendJointControl`, `sendEmergencyStop` 等）给UI层。也包含自定义UI控件
 - **Utils层**：Logger日志和ErrorHandler，被所有层依赖
 - **UI层**（根目录）：MainWindow组装所有组件，处理键盘/手柄事件分发
 

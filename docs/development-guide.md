@@ -352,21 +352,18 @@ hostcomputer/
 
 ## 开发示例
 
-### 示例1: 电机速度控制流程
+### 示例1: 操作者输入快照发送流程
 
 ```cpp
 // Controller层处理用户输入
-void MotorController::setSpeed(double targetSpeed) {
-    if (!m_communication->isConnected()) {
-        emit errorOccurred("电机未连接");
+void InputController::publishOperatorInput(const OperatorInputState &state) {
+    if (!m_tcpClient->isConnected()) {
+        emit errorOccurred("TCP未连接");
         return;
     }
 
-    // 构造速度控制命令帧
-    QByteArray speedFrame = buildSpeedCommand(targetSpeed);
-
-    // 通过Communication层发送
-    m_communication->sendFrame(speedFrame);
+    // 上位机只发送键盘/手柄输入快照，不在本地翻译成速度语义。
+    m_tcpClient->sendOperatorInput(state);
 }
 
 // Communication层发送原始数据

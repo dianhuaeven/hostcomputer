@@ -4,6 +4,8 @@
 传输方式：TCP 长连接，每条 JSON 消息以 `\n` 结尾
 数据编码：UTF-8
 
+> 当前上位机发送协议以 `docs/通信与视频链路改造计划.md` 中的协议 v1 为准。旧版 `cmd_vel` JSON 帧已经废弃；上位机只发送 `operator_input` 输入快照，下位机 bridge 自行解析并发布 ROS `/cmd_vel` 或其他内部控制指令。
+
 ---
 
 ## 一、上位机 → 下位机（发送）
@@ -65,26 +67,62 @@
 
 ---
 
-### 3. cmd_vel — 速度控制命令
+### 3. operator_input — 操作者输入快照
 
-控制机器人整体运动速度（键盘控制时发送）。
+承载键盘与手柄当前输入状态。该帧不逐条 ACK，靠 `seq`、`ttl_ms` 和下位机 watchdog 保证高频输入安全。
 
 ```json
 {
-  "type": "cmd_vel",
-  "linear_x": 0.5,
-  "linear_y": 0.0,
-  "angular_z": 0.3,
-  "timestamp": 1709971200000
+  "type": "operator_input",
+  "protocol_version": 1,
+  "seq": 12345,
+  "timestamp_ms": 1709971200000,
+  "ttl_ms": 300,
+  "mode": "vehicle",
+  "keyboard": {
+    "pressed_keys": ["w", "d", "shift"]
+  },
+  "gamepad": {
+    "connected": true,
+    "buttons": {
+      "a": false,
+      "b": false,
+      "x": false,
+      "y": false,
+      "start": false,
+      "back": false,
+      "lb": false,
+      "rb": false,
+      "l3": false,
+      "r3": false,
+      "dpad_up": false,
+      "dpad_down": false,
+      "dpad_left": false,
+      "dpad_right": false
+    },
+    "axes": {
+      "left_x": 0.0,
+      "left_y": 0.82,
+      "right_x": -0.31,
+      "right_y": 0.0,
+      "lt": 0.0,
+      "rt": 0.5
+    }
+  }
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| linear_x | float | 线速度X（前进/后退） |
-| linear_y | float | 线速度Y（左移/右移） |
-| angular_z | float | 角速度Z（左转/右转） |
-| timestamp | int64 | 毫秒级时间戳 |
+| protocol_version | int | 协议版本，当前为 1 |
+| seq | int64 | 上位机单调递增序号 |
+| timestamp_ms | int64 | 毫秒级时间戳 |
+| ttl_ms | int | 输入快照有效期 |
+| mode | string | `vehicle` / `arm` |
+| keyboard.pressed_keys | array[string] | 当前按下集合，未出现的键视为未按下 |
+| gamepad.connected | bool | 手柄是否在线 |
+| gamepad.buttons | object | 手柄按钮完整快照，摇杆按下使用 `l3` / `r3` |
+| gamepad.axes | object | 摇杆范围 `[-1.0, 1.0]`，扳机范围 `[0.0, 1.0]` |
 
 ---
 
@@ -95,13 +133,21 @@
 ```json
 {
   "type": "emergency_stop",
-  "timestamp": 1709971200000
+  "protocol_version": 1,
+  "seq": 2001,
+  "timestamp_ms": 1709971200000,
+  "params": {
+    "source": "button"
+  }
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| timestamp | int64 | 毫秒级时间戳 |
+| protocol_version | int | 协议版本，当前为 1 |
+| seq | int64 | 上位机单调递增序号 |
+| timestamp_ms | int64 | 毫秒级时间戳 |
+| params.source | string | 触发来源，例如 `button`、`keyboard_space`、`gamepad_a` |
 
 ---
 
@@ -135,13 +181,29 @@
 ```json
 {
   "type": "heartbeat",
-  "timestamp": 1709971200000
+  "protocol_version": 1,
+  "seq": 3000,
+  "timestamp_ms": 1709971200000
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| timestamp | int64 | 毫秒级时间戳 |
+| protocol_version | int | 协议版本，当前为 1 |
+| seq | int64 | 上位机单调递增序号 |
+| timestamp_ms | int64 | 毫秒级时间戳 |
+
+下位机应返回：
+
+```json
+{
+  "type": "heartbeat_ack",
+  "protocol_version": 1,
+  "seq": 3000,
+  "timestamp_ms": 1709971200100,
+  "server_time_ms": 1709971200100
+}
+```
 
 ---
 
