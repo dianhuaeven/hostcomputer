@@ -6,12 +6,14 @@ import subprocess
 import sys
 import time
 from typing import Any, Dict, List
+from urllib.request import urlopen
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BRIDGE = os.path.join(ROOT, "ros1_bridge", "host_bridge_node.py")
 HOST = "127.0.0.1"
 PORT = int(os.getenv("BRIDGE_LOOPBACK_PORT", "19091"))
+DEBUG_PORT = int(os.getenv("BRIDGE_LOOPBACK_DEBUG_PORT", "19092"))
 
 
 class JsonLineClient:
@@ -92,6 +94,11 @@ def start_bridge() -> subprocess.Popen:
             str(PORT),
             "--watchdog-ms",
             "150",
+            "--debug-ui",
+            "--debug-host",
+            HOST,
+            "--debug-port",
+            str(DEBUG_PORT),
         ],
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
@@ -99,6 +106,22 @@ def start_bridge() -> subprocess.Popen:
     )
     wait_for_port()
     return proc
+
+
+def get_json(path: str) -> Dict[str, Any]:
+    with urlopen(f"http://{HOST}:{DEBUG_PORT}{path}", timeout=1.0) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def wait_for_debug_event(category: str, message: str, timeout: float = 1.0) -> Dict[str, Any]:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        events = get_json("/api/events?limit=200")["events"]
+        for event in events:
+            if event.get("category") == category and event.get("message") == message:
+                return event
+        time.sleep(0.05)
+    raise AssertionError(f"missing debug event {category}:{message}")
 
 
 def stop_bridge(proc: subprocess.Popen) -> None:
@@ -199,6 +222,21 @@ def main() -> None:
             })
             ignored = client.recv_status("ignored_emergency")
             assert ignored["cmd_vel"]["linear_x"] == 0.0
+
+            state = get_json("/api/state")["state"]
+            assert state["emergency_active"] is True
+            assert state["last_operator_seq"] == 6
+            assert state["last_twist"]["linear_x"] == 0.0
+
+            cameras_api = get_json("/api/cameras")
+            assert len(cameras_api["cameras"]) >= 1
+
+            accepted_event = wait_for_debug_event("operator_input", "operator input accepted")
+            assert accepted_event["data"]["seq"] == 4
+            watchdog_event = wait_for_debug_event("watchdog", "operator input watchdog timeout")
+            assert watchdog_event["level"] == "warning"
+            emergency_event = wait_for_debug_event("emergency", "emergency stop accepted")
+            assert emergency_event["data"]["source"] == "bridge_loopback"
         finally:
             client.close()
     finally:
