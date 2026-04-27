@@ -21,6 +21,8 @@ class MainWindow;
 }
 QT_END_NAMESPACE
 
+class QTextEdit;
+
 // 控制模式枚举
 enum class ControlMode {
     Vehicle = 0,  // 车体运动模式 (D-Pad上)
@@ -131,6 +133,9 @@ private:
 
     // 3D机器人姿态视图
     RobotAttitudeWidget* m_robotAttitudeWidget = nullptr;
+
+    // 数据显示
+    QTextEdit* m_textData = nullptr;
 
     // 状态管理
     bool m_isConnected = false;

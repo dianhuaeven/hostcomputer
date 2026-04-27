@@ -24,6 +24,8 @@
 #include <QSettings>
 #include <QNetworkInterface>
 #include <QFrame>
+#include <QGroupBox>
+#include <QTextEdit>
 #include <QThread>
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -50,7 +52,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->group_cameras->setTitle("视频与环境遥测");
     ui->group_car_model->setTitle("姿态与控制");
     ui->group_commands->setTitle("指令日志");
-    ui->group_errors->setTitle("数据 / 错误");
+    ui->group_errors->setTitle("错误日志");
     ui->horizontalLayout_main->setStretch(0, 3);
     ui->horizontalLayout_main->setStretch(1, 2);
     ui->verticalLayout_right->setStretch(0, 2);
@@ -144,6 +146,15 @@ void MainWindow::setupDisplayLayout()
     m_robotAttitudeWidget = new RobotAttitudeWidget(ui->CarWidget);
     carLayout->addWidget(m_robotAttitudeWidget);
     ui->CarWidget->setLayout(carLayout);
+
+    auto *dataGroup = new QGroupBox("数据面板", this);
+    auto *dataLayout = new QVBoxLayout(dataGroup);
+    dataLayout->setContentsMargins(6, 6, 6, 6);
+    m_textData = new QTextEdit(dataGroup);
+    m_textData->setReadOnly(true);
+    m_textData->setPlaceholderText("等待下位机数据...");
+    dataLayout->addWidget(m_textData);
+    ui->horizontalLayout_logs->insertWidget(1, dataGroup);
 }
 
 void MainWindow::setupKeyboardController()
@@ -389,9 +400,6 @@ void MainWindow::updateJointsData(const Communication::MotorState& motorState)
         );
     }
 
-    // 清空text_errors控件
-    ui->text_errors->clear();
-
     // 添加时间戳
     QString timestamp = getCurrentTimestamp();
     QString header = QString("[%1] 6关节数据接收\n").arg(timestamp);
@@ -416,34 +424,13 @@ void MainWindow::updateJointsData(const Communication::MotorState& motorState)
     jointsData += QString("执行器标志: 0x%1\n").arg(motorState.executor_flags, 2, 16, QChar('0'));
     jointsData += QString("保留字段: %1\n").arg(motorState.reserved);
 
-    // 设置文本内容
-    ui->text_errors->setText(header + jointsData);
-
-    // 在命令区域添加格式化的关节数据
-    addCommand("[关节数据] 数据已更新到显示区域");
-
-    // 格式化显示6个关节的位置数据（用于命令区域）
-    QString positionData = QString("[关节数据] 位置: ");
-    for (int i = 0; i < 6; ++i) {
-        positionData += QString("J%1:%2 ").arg(i+1).arg(motorState.joints[i].position / 1000.0f, 0, 'f', 3);
+    if (m_textData) {
+        m_textData->setText(header + jointsData);
+        QTextCursor cursor = m_textData->textCursor();
+        cursor.movePosition(QTextCursor::End);
+        m_textData->setTextCursor(cursor);
+        m_textData->ensureCursorVisible();
     }
-    addCommand(positionData);
-
-    // 格式化显示6个关节的电流数据（用于命令区域）
-    QString currentData = QString("[电流数据] 电流: ");
-    for (int i = 0; i < 6; ++i) {
-        currentData += QString("J%1:%2A ").arg(i+1).arg(motorState.joints[i].current / 1000.0f, 0, 'f', 3);
-    }
-    addCommand(currentData);
-
-    // 可选：滚动到底部
-    QTextCursor cursor = ui->text_errors->textCursor();
-    cursor.movePosition(QTextCursor::End);
-    ui->text_errors->setTextCursor(cursor);
-    ui->text_errors->ensureCursorVisible();
-
-    // 同时在命令区域显示接收消息
-    addCommand("[数据] 已接收并显示6关节数据");
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
