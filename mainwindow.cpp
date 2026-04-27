@@ -46,6 +46,15 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle("上位机v2");
     resize(1920, 1080);
     setMinimumSize(1600, 900);
+    ui->frame_status->hide();
+    ui->group_cameras->setTitle("视频与环境遥测");
+    ui->group_car_model->setTitle("姿态与控制");
+    ui->group_commands->setTitle("指令日志");
+    ui->group_errors->setTitle("数据 / 错误");
+    ui->horizontalLayout_main->setStretch(0, 3);
+    ui->horizontalLayout_main->setStretch(1, 2);
+    ui->verticalLayout_right->setStretch(0, 2);
+    ui->verticalLayout_right->setStretch(1, 3);
 
     // 初始化组件
     setupController();
