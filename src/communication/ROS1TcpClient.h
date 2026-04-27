@@ -121,6 +121,7 @@ private:
     bool m_heartbeatOnline;
     int m_reconnectAttempts;
     qint64 m_lastMessageReceivedMs;
+    qint64 m_lastHeartbeatAckMs;
     quint64 m_nextSequence;
 
     // 统计信息

@@ -18,6 +18,7 @@ ROS1TcpClient::ROS1TcpClient(QObject *parent)
     , m_heartbeatOnline(false)
     , m_reconnectAttempts(0)
     , m_lastMessageReceivedMs(0)
+    , m_lastHeartbeatAckMs(0)
     , m_nextSequence(0)
     , m_heartbeatTimer(new QTimer(this))
     , m_reconnectTimer(new QTimer(this))
@@ -364,6 +365,7 @@ void ROS1TcpClient::handleConnected()
 {
     m_isConnected = true;
     m_lastMessageReceivedMs = QDateTime::currentMSecsSinceEpoch();
+    m_lastHeartbeatAckMs = 0;
     setHeartbeatOnline(false);
     m_reconnectAttempts = 0;
     m_reconnectTimer->stop();
@@ -450,7 +452,7 @@ void ROS1TcpClient::checkConnection()
         handleDisconnected();
     } else {
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        if (m_lastMessageReceivedMs > 0 && now - m_lastMessageReceivedMs > HEARTBEAT_INTERVAL_MS * 3) {
+        if (m_lastHeartbeatAckMs > 0 && now - m_lastHeartbeatAckMs > HEARTBEAT_INTERVAL_MS * 3) {
             setHeartbeatOnline(false);
         }
 
@@ -517,8 +519,8 @@ void ROS1TcpClient::processReceivedData()
         emit rawMessageReceived(line);
 
         m_stats.messagesReceived++;
-        m_lastMessageReceivedMs = QDateTime::currentMSecsSinceEpoch();
-        setHeartbeatOnline(true);
+        const qint64 receivedAtMs = QDateTime::currentMSecsSinceEpoch();
+        m_lastMessageReceivedMs = receivedAtMs;
 
         // 根据消息类型处理
         QString msgType = msg["type"].toString();
@@ -527,7 +529,18 @@ void ROS1TcpClient::processReceivedData()
             continue;
         }
 
-        if (msgType == "motor_state") {
+        if (msgType == "heartbeat_ack") {
+            m_lastHeartbeatAckMs = receivedAtMs;
+            setHeartbeatOnline(true);
+        } else if (msgType == "heartbeat") {
+            m_lastHeartbeatAckMs = receivedAtMs;
+            setHeartbeatOnline(true);
+        } else if (msgType == "ack") {
+            emit systemStatusReceived(msg);
+        } else if (msgType == "system_snapshot" || msgType == "camera_list_response"
+                   || msgType == "param_response" || msgType == "emergency_state") {
+            emit systemStatusReceived(msg);
+        } else if (msgType == "motor_state") {
             MotorState state = parseMotorState(msg);
             emit motorStateReceived(state);
         } else if (msgType == "joint_data") {
@@ -559,7 +572,7 @@ void ROS1TcpClient::processReceivedData()
             int fps = msg["fps"].toInt();
             int bitrateKbps = msg["bitrate_kbps"].toInt();
             emit cameraInfoReceived(cameraId, rtspUrl, online, codec, width, height, fps, bitrateKbps);
-        } else if (msgType != "heartbeat") {
+        } else {
             LOG_DEBUG(MODULE, QString("收到未处理的消息类型: %1").arg(msgType));
         }
     }

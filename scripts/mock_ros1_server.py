@@ -7,6 +7,40 @@ import time
 HOST = "127.0.0.1"
 PORT = 9090
 DROP_INTERVAL_SEC = 15
+CRITICAL_COMMANDS = {
+    "emergency_stop",
+    "clear_emergency",
+    "motor_init",
+    "motor_enable",
+    "motor_disable",
+    "set_control_mode",
+    "home_arm",
+    "start_task",
+    "stop_task",
+    "executor_action",
+    "set_param",
+}
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+def send_json(conn, payload):
+    conn.sendall((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
+
+
+def make_ack(msg, ok=True, code=0, message="ok"):
+    return {
+        "type": "ack",
+        "protocol_version": 1,
+        "ack_type": msg.get("type", "unknown"),
+        "seq": msg.get("seq", 0),
+        "ok": ok,
+        "code": code,
+        "message": message,
+        "timestamp_ms": now_ms(),
+    }
 
 
 def client_worker(conn, addr):
@@ -38,11 +72,30 @@ def client_worker(conn, addr):
 
                 mtype = msg.get("type", "unknown")
                 if mtype == "heartbeat":
-                    resp = {"type": "system_status", "mock": True, "ts": int(time.time() * 1000)}
-                    conn.sendall((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+                    send_json(conn, {
+                        "type": "heartbeat_ack",
+                        "protocol_version": 1,
+                        "seq": msg.get("seq", 0),
+                        "timestamp_ms": now_ms(),
+                        "server_time_ms": now_ms(),
+                    })
+                elif mtype == "operator_input":
+                    send_json(conn, {
+                        "type": "system_status",
+                        "mock": True,
+                        "last_operator_input_seq": msg.get("seq", 0),
+                        "timestamp_ms": now_ms(),
+                    })
+                elif mtype in CRITICAL_COMMANDS:
+                    send_json(conn, make_ack(msg))
+                elif mtype == "system_command":
+                    send_json(conn, make_ack(msg, message=f"system command {msg.get('command', '')} accepted"))
                 elif mtype == "cmd_vel":
-                    resp = {"type": "system_status", "ack": "cmd_vel", "ts": int(time.time() * 1000)}
-                    conn.sendall((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+                    send_json(conn, {
+                        "type": "system_status",
+                        "ack": "legacy_cmd_vel",
+                        "timestamp_ms": now_ms(),
+                    })
     finally:
         try:
             conn.close()
