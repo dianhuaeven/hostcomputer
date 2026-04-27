@@ -2,8 +2,10 @@
 
 #include "RobotViewModel.h"
 
-#include <QQmlContext>
+#include <QObject>
+#include <QQuickItem>
 #include <QQuickWidget>
+#include <QVariant>
 #include <QVBoxLayout>
 #include <QDebug>
 
@@ -16,17 +18,29 @@ RobotAttitudeWidget::RobotAttitudeWidget(QWidget *parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_robotView);
 
-    m_robotView->rootContext()->setContextProperty("robotViewModel", m_viewModel);
-    m_robotView->setSource(QUrl("qrc:/resources/qml/RobotView.qml"));
     m_robotView->setResizeMode(QQuickWidget::SizeRootObjectToView);
 
+    auto bindViewModel = [this]() {
+        if (QObject *root = m_robotView->rootObject()) {
+            root->setProperty("viewModel", QVariant::fromValue(static_cast<QObject*>(m_viewModel)));
+        }
+    };
+
     connect(m_robotView, &QQuickWidget::statusChanged, this, [this](QQuickWidget::Status status) {
+        if (status == QQuickWidget::Ready) {
+            if (QObject *root = m_robotView->rootObject()) {
+                root->setProperty("viewModel", QVariant::fromValue(static_cast<QObject*>(m_viewModel)));
+            }
+        }
         if (status == QQuickWidget::Error) {
             for (const auto &err : m_robotView->errors()) {
                 qWarning() << "[RobotView]" << err.toString();
             }
         }
     });
+
+    m_robotView->setSource(QUrl("qrc:/resources/qml/RobotView.qml"));
+    bindViewModel();
 }
 
 void RobotAttitudeWidget::updateAttitude(double roll, double pitch, double yaw)
