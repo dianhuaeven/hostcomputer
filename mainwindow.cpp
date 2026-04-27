@@ -364,7 +364,11 @@ void MainWindow::updateBandwidthAndPacketLoss()
     if (deltaSent > 0 && deltaSent > deltaReceived) {
         lossRate = (double)(deltaSent - deltaReceived) / deltaSent * 100.0;
     }
-    const QString bandwidthText = QString("%1 | 丢包: %2%").arg(pressure).arg(lossRate, 0, 'f', 1);
+    const QString bandwidthText = QString("%1 | 丢包: %2% | ACK: %3/%4")
+                                      .arg(pressure)
+                                      .arg(lossRate, 0, 'f', 1)
+                                      .arg(stats.ackPendingCount)
+                                      .arg(stats.ackTimeoutCount);
     ui->label_cpu_value->setText(bandwidthText);
     if (m_telemetryPanel) {
         m_telemetryPanel->setBandwidthText(bandwidthText);
@@ -636,8 +640,13 @@ void MainWindow::triggerEmergencyStop(const QString &source)
 
     // 1. 立即停止所有运动（TCP通道）
     if (m_controller && m_controller->isTcpConnected()) {
-        m_controller->sendEmergencyStop(source);
-        addCommand("[急停] TCP急停指令已发送");
+        if (m_controller->sendEmergencyStop(source)) {
+            addCommand("[急停] TCP急停指令已发送，等待ACK");
+        } else {
+            addError("[急停] TCP急停指令发送失败");
+        }
+    } else {
+        addError("[急停] TCP未连接，急停未下发到下位机");
     }
 
     // 2. 清空输入快照，确保急停后不会继续发送旧输入意图
@@ -1201,23 +1210,61 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
 {
     const QString type = message["type"].toString();
 
+    if (type == "ack_pending") {
+        addCommand(QString("[ACK] waiting %1 seq=%2 timeout=%3ms")
+                   .arg(message["ack_type"].toString("unknown"))
+                   .arg(message["seq"].toVariant().toLongLong())
+                   .arg(message["timeout_ms"].toInt()));
+        return;
+    }
+
     if (type == "ack") {
         const QString ackType = message["ack_type"].toString("unknown");
         const qint64 seq = message["seq"].toVariant().toLongLong();
         const bool ok = message["ok"].toBool(false);
         const int code = message["code"].toInt(-1);
         const QString text = message["message"].toString();
-        const QString line = QString("[ACK] %1 seq=%2 %3 code=%4 %5")
+        const QString line = QString("[ACK] %1 seq=%2 %3 code=%4 elapsed=%5ms %6")
                                  .arg(ackType)
                                  .arg(seq)
                                  .arg(ok ? "OK" : "FAIL")
                                  .arg(code)
+                                 .arg(message["elapsed_ms"].toVariant().toLongLong())
                                  .arg(text);
         if (ok) {
             addCommand(line);
         } else {
             addError(line);
         }
+        return;
+    }
+
+    if (type == "ack_timeout" || type == "ack_disconnected") {
+        addError(QString("[ACK] %1 %2 seq=%3 elapsed=%4ms")
+                 .arg(type == "ack_timeout" ? "TIMEOUT" : "DISCONNECTED")
+                 .arg(message["ack_type"].toString("unknown"))
+                 .arg(message["seq"].toVariant().toLongLong())
+                 .arg(message["elapsed_ms"].toVariant().toLongLong()));
+        return;
+    }
+
+    if (type == "ack_unmatched") {
+        addError(QString("[ACK] UNMATCHED %1 seq=%2 code=%3 %4")
+                 .arg(message["ack_type"].toString("unknown"))
+                 .arg(message["seq"].toVariant().toLongLong())
+                 .arg(message["code"].toInt(-1))
+                 .arg(message["message"].toString()));
+        return;
+    }
+
+    if (type == "ack_mismatch") {
+        addError(QString("[ACK] MISMATCH actual=%1 expected=%2 seq=%3 elapsed=%4ms code=%5 %6")
+                 .arg(message["ack_type"].toString("unknown"))
+                 .arg(message["expected_ack_type"].toString("unknown"))
+                 .arg(message["seq"].toVariant().toLongLong())
+                 .arg(message["elapsed_ms"].toVariant().toLongLong())
+                 .arg(message["code"].toInt(-1))
+                 .arg(message["message"].toString()));
         return;
     }
 

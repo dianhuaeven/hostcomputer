@@ -207,6 +207,40 @@
 
 ---
 
+### 7. ack — 关键命令确认
+
+关键离散命令必须返回 ACK。上位机会在发送后登记 pending，超时、断线、迟到 ACK 都会进入 UI 日志。
+
+```json
+{
+  "type": "ack",
+  "protocol_version": 1,
+  "ack_type": "emergency_stop",
+  "seq": 2001,
+  "ok": true,
+  "code": 0,
+  "message": "emergency active",
+  "timestamp_ms": 1709971200100
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| ack_type | string | 被确认的命令类型 |
+| seq | int64 | 对应原命令的 `seq` |
+| ok | bool | 是否成功 |
+| code | int | 0 成功，非 0 为错误码 |
+| message | string | 人类可读信息 |
+
+mock server 可用环境变量模拟 ACK 行为：
+
+- `MOCK_ACK_MODE=ok`：默认成功 ACK。
+- `MOCK_ACK_MODE=fail`：返回失败 ACK。
+- `MOCK_ACK_MODE=drop`：不返回 ACK，用于测试超时。
+- `MOCK_ACK_DELAY_SEC=3`：延迟 ACK，用于测试迟到 ACK 或超时。
+
+---
+
 ## 二、下位机 → 上位机（接收）
 
 ### 1. motor_state — 电机状态数据

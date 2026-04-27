@@ -64,6 +64,9 @@ public:
         quint64 bytesReceived;
         quint64 connectionCount;
         quint64 reconnectCount;
+        quint64 ackPendingCount;
+        quint64 ackReceivedCount;
+        quint64 ackTimeoutCount;
     };
     Statistics getTcpStatistics() const;
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import socket
 import threading
 import time
@@ -7,6 +8,8 @@ import time
 HOST = "127.0.0.1"
 PORT = 9090
 DROP_INTERVAL_SEC = 15
+ACK_MODE = os.getenv("MOCK_ACK_MODE", "ok").lower()
+ACK_DELAY_SEC = float(os.getenv("MOCK_ACK_DELAY_SEC", "0"))
 CRITICAL_COMMANDS = {
     "emergency_stop",
     "clear_emergency",
@@ -41,6 +44,21 @@ def make_ack(msg, ok=True, code=0, message="ok"):
         "message": message,
         "timestamp_ms": now_ms(),
     }
+
+
+def maybe_send_ack(conn, msg, message="ok"):
+    if ACK_MODE == "drop":
+        print(f"[mock] drop ack for seq={msg.get('seq', 0)} type={msg.get('type', 'unknown')}")
+        return
+
+    if ACK_DELAY_SEC > 0:
+        time.sleep(ACK_DELAY_SEC)
+
+    if ACK_MODE == "fail":
+        send_json(conn, make_ack(msg, ok=False, code=500, message="mock ack failure"))
+        return
+
+    send_json(conn, make_ack(msg, message=message))
 
 
 def client_worker(conn, addr):
@@ -87,9 +105,9 @@ def client_worker(conn, addr):
                         "timestamp_ms": now_ms(),
                     })
                 elif mtype in CRITICAL_COMMANDS:
-                    send_json(conn, make_ack(msg))
+                    maybe_send_ack(conn, msg)
                 elif mtype == "system_command":
-                    send_json(conn, make_ack(msg, message=f"system command {msg.get('command', '')} accepted"))
+                    maybe_send_ack(conn, msg, message=f"system command {msg.get('command', '')} accepted")
                 else:
                     send_json(conn, {
                         "type": "protocol_error",

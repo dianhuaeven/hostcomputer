@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QByteArray>
+#include <QHash>
 #include "HostProtocol.h"
 #include "SharedStructs.h"
 #include "Logger.h"
@@ -58,6 +59,9 @@ public:
         quint64 bytesReceived;
         quint64 connectionCount;
         quint64 reconnectCount;
+        quint64 ackPendingCount;
+        quint64 ackReceivedCount;
+        quint64 ackTimeoutCount;
     };
     Stats getStats() const;
     void resetStats();
@@ -97,11 +101,25 @@ private slots:
     void handleReadyRead();
     void handleError(QAbstractSocket::SocketError error);
     void checkConnection();
+    void checkAckTimeouts();
 
 private:
+    struct PendingAck {
+        quint64 seq = 0;
+        QString ackType;
+        qint64 sentAtMs = 0;
+        qint64 deadlineMs = 0;
+    };
+
     void setupConnection();
     bool sendMessage(const QJsonObject &message);
+    bool sendTrackedMessage(const QJsonObject &message, const QString &ackType);
     quint64 nextSequence();
+    void registerPendingAck(const QJsonObject &message, const QString &ackType);
+    void handleAckMessage(const QJsonObject &message, qint64 receivedAtMs);
+    void failPendingAck(const PendingAck &pending, const QString &eventType,
+                        const QString &message, int code, qint64 nowMs);
+    void failAllPendingAcks(const QString &eventType, const QString &message, int code);
     void processReceivedData();
     MotorState parseMotorState(const QJsonObject &json);
     void setHeartbeatOnline(bool online);
@@ -114,6 +132,7 @@ private:
     QByteArray m_receivedData;
     QTimer *m_heartbeatTimer;
     QTimer *m_reconnectTimer;
+    QTimer *m_ackTimer;
 
     bool m_isConnected;
     bool m_autoReconnect;
@@ -122,6 +141,7 @@ private:
     qint64 m_lastMessageReceivedMs;
     qint64 m_lastHeartbeatAckMs;
     quint64 m_nextSequence;
+    QHash<quint64, PendingAck> m_pendingAcks;
 
     // 统计信息
     Stats m_stats;
@@ -130,6 +150,8 @@ private:
     static const int MAX_RECONNECT_ATTEMPTS = 5;
     static const int HEARTBEAT_INTERVAL_MS = 1000;
     static const int RECONNECT_INTERVAL_MS = 3000;
+    static const int ACK_TIMEOUT_MS = 2000;
+    static const int ACK_CHECK_INTERVAL_MS = 100;
 };
 
 } // namespace Communication

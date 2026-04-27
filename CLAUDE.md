@@ -74,7 +74,7 @@ ninja
 
 ### 控制 (src/controller/)
 - **`Controller`**：业务逻辑核心，封装所有与下位机交互的命令接口
-- **`KeyboardController`**：键盘按键 → 速度命令映射（车体/机械臂双模式）
+- **`KeyboardController`**：采集键盘输入并输出协议层按键名（车体/机械臂双模式）
 - **`HandleKey`**：XInput手柄驱动，轮询手柄状态并发出`ControllerState`信号
 - **`RtspPlayerWidget`**：基于`QMediaPlayer`的RTSP视频播放控件，5路并发
 - **`DisplayLayoutManager`**：管理2×3视频网格布局
@@ -96,7 +96,7 @@ ninja
 ### TCP JSON协议 (Port 9090)
 
 接收：`motor_state`（关节位置/电流）、`co2_data`、`imu_data`、`camera_info`（含RTSP URL）
-发送：`motor_command`、`velocity_command`、`joint_control`、`emergency_stop`、`end_effector`
+发送：`operator_input`（高频键盘/手柄输入快照，不逐条 ACK）、`emergency_stop` / `system_command`（关键命令，必须 ACK），以及保留的低频机械臂/电机控制帧。
 
 摄像头信息推送触发RTSP自动播放：`camera_id` 0-4对应2×3网格前5格，`online: true`时启动播放。
 

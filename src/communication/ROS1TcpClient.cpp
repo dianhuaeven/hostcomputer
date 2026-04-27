@@ -22,6 +22,7 @@ ROS1TcpClient::ROS1TcpClient(QObject *parent)
     , m_nextSequence(0)
     , m_heartbeatTimer(new QTimer(this))
     , m_reconnectTimer(new QTimer(this))
+    , m_ackTimer(new QTimer(this))
 {
     // 初始化统计信息
     m_stats.messagesSent = 0;
@@ -30,6 +31,9 @@ ROS1TcpClient::ROS1TcpClient(QObject *parent)
     m_stats.bytesReceived = 0;
     m_stats.connectionCount = 0;
     m_stats.reconnectCount = 0;
+    m_stats.ackPendingCount = 0;
+    m_stats.ackReceivedCount = 0;
+    m_stats.ackTimeoutCount = 0;
 
     setupConnection();
 
@@ -77,6 +81,9 @@ void ROS1TcpClient::setupConnection()
             emit connectionError(msg);
         }
     });
+
+    m_ackTimer->setInterval(ACK_CHECK_INTERVAL_MS);
+    connect(m_ackTimer, &QTimer::timeout, this, &ROS1TcpClient::checkAckTimeouts);
 }
 
 bool ROS1TcpClient::connectToROS(const QString &hostAddress, quint16 port)
@@ -192,7 +199,9 @@ bool ROS1TcpClient::sendEmergencyStop(const QString &source)
 
     QJsonObject params;
     params["source"] = source.isEmpty() ? QStringLiteral("upper_computer") : source;
-    return sendMessage(HostProtocol::makeCommand(QStringLiteral("emergency_stop"), nextSequence(), params));
+    return sendTrackedMessage(
+        HostProtocol::makeCommand(QStringLiteral("emergency_stop"), nextSequence(), params),
+        QStringLiteral("emergency_stop"));
 }
 
 bool ROS1TcpClient::sendSystemCommand(const QString &command, const QJsonObject &params)
@@ -208,7 +217,7 @@ bool ROS1TcpClient::sendSystemCommand(const QString &command, const QJsonObject 
 
     LOG_INFO(MODULE, QString("发送系统命令: %1").arg(command));
 
-    return sendMessage(msg);
+    return sendTrackedMessage(msg, QStringLiteral("system_command"));
 }
 
 bool ROS1TcpClient::sendEndEffectorControl(float x, float y, float z, float roll, float pitch, float yaw)
@@ -291,7 +300,9 @@ quint16 ROS1TcpClient::getROSPort() const
 
 ROS1TcpClient::Stats ROS1TcpClient::getStats() const
 {
-    return m_stats;
+    Stats stats = m_stats;
+    stats.ackPendingCount = static_cast<quint64>(m_pendingAcks.size());
+    return stats;
 }
 
 void ROS1TcpClient::resetStats()
@@ -302,6 +313,8 @@ void ROS1TcpClient::resetStats()
     m_stats.bytesReceived = 0;
     m_stats.connectionCount = 0;
     m_stats.reconnectCount = 0;
+    m_stats.ackReceivedCount = 0;
+    m_stats.ackTimeoutCount = 0;
     emitStatsUpdate();
     LOG_INFO(MODULE, "统计信息已重置");
 }
@@ -369,6 +382,8 @@ void ROS1TcpClient::handleDisconnected()
     m_isConnected = false;
     setHeartbeatOnline(false);
     m_heartbeatTimer->stop();
+    failAllPendingAcks(QStringLiteral("ack_disconnected"),
+                       QStringLiteral("connection lost before ACK"), -2);
 
     if (wasConnected) {
         LOG_WARNING(MODULE, "与ROS节点断开连接");
@@ -442,6 +457,37 @@ void ROS1TcpClient::checkConnection()
     }
 }
 
+void ROS1TcpClient::checkAckTimeouts()
+{
+    if (m_pendingAcks.isEmpty()) {
+        m_ackTimer->stop();
+        return;
+    }
+
+    const qint64 now = HostProtocol::nowMs();
+    QList<PendingAck> expired;
+    for (auto it = m_pendingAcks.cbegin(); it != m_pendingAcks.cend(); ++it) {
+        if (now >= it.value().deadlineMs) {
+            expired.append(it.value());
+        }
+    }
+
+    for (const PendingAck &pending : expired) {
+        if (!m_pendingAcks.remove(pending.seq)) {
+            continue;
+        }
+        m_stats.ackTimeoutCount++;
+        failPendingAck(pending, QStringLiteral("ack_timeout"),
+                       QStringLiteral("ACK timeout"), -1, now);
+    }
+
+    if (m_pendingAcks.isEmpty()) {
+        m_ackTimer->stop();
+    }
+
+    emitStatsUpdate();
+}
+
 bool ROS1TcpClient::sendMessage(const QJsonObject &message)
 {
     if (!isConnected()) {
@@ -461,10 +507,20 @@ bool ROS1TcpClient::sendMessage(const QJsonObject &message)
     m_stats.messagesSent++;
     m_stats.bytesSent += bytesWritten;
 
-    bool flushed = m_socket->flush();
+    m_socket->flush();
     emitStatsUpdate();
 
-    return flushed;
+    return bytesWritten == data.size();
+}
+
+bool ROS1TcpClient::sendTrackedMessage(const QJsonObject &message, const QString &ackType)
+{
+    if (!sendMessage(message)) {
+        return false;
+    }
+
+    registerPendingAck(message, ackType);
+    return true;
 }
 
 quint64 ROS1TcpClient::nextSequence()
@@ -474,6 +530,146 @@ quint64 ROS1TcpClient::nextSequence()
         m_nextSequence = 1;
     }
     return m_nextSequence;
+}
+
+void ROS1TcpClient::registerPendingAck(const QJsonObject &message, const QString &ackType)
+{
+    const qint64 seqValue = message["seq"].toVariant().toLongLong();
+    if (seqValue <= 0) {
+        LOG_WARNING(MODULE, QString("无法跟踪ACK，缺少有效seq: %1").arg(ackType));
+        return;
+    }
+
+    const qint64 now = HostProtocol::nowMs();
+    PendingAck pending;
+    pending.seq = static_cast<quint64>(seqValue);
+    pending.ackType = ackType;
+    pending.sentAtMs = now;
+    pending.deadlineMs = now + ACK_TIMEOUT_MS;
+    m_pendingAcks.insert(pending.seq, pending);
+
+    QJsonObject event;
+    event["type"] = "ack_pending";
+    event["protocol_version"] = HostProtocol::ProtocolVersion;
+    event["ack_type"] = ackType;
+    event["seq"] = static_cast<qint64>(pending.seq);
+    event["timestamp_ms"] = now;
+    event["deadline_ms"] = pending.deadlineMs;
+    event["timeout_ms"] = ACK_TIMEOUT_MS;
+    emit systemStatusReceived(event);
+
+    if (!m_ackTimer->isActive()) {
+        m_ackTimer->start();
+    }
+
+    emitStatsUpdate();
+}
+
+void ROS1TcpClient::handleAckMessage(const QJsonObject &message, qint64 receivedAtMs)
+{
+    const qint64 seqValue = message["seq"].toVariant().toLongLong();
+    const QString ackType = message["ack_type"].toString("unknown");
+
+    if (seqValue <= 0) {
+        QJsonObject event;
+        event["type"] = "ack_unmatched";
+        event["protocol_version"] = HostProtocol::ProtocolVersion;
+        event["ack_type"] = ackType;
+        event["seq"] = seqValue;
+        event["code"] = -3;
+        event["message"] = QStringLiteral("ACK missing valid seq");
+        event["timestamp_ms"] = receivedAtMs;
+        event["ack"] = message;
+        emit systemStatusReceived(event);
+        return;
+    }
+
+    const quint64 seq = static_cast<quint64>(seqValue);
+    auto it = m_pendingAcks.find(seq);
+    if (it == m_pendingAcks.end()) {
+        QJsonObject event;
+        event["type"] = "ack_unmatched";
+        event["protocol_version"] = HostProtocol::ProtocolVersion;
+        event["ack_type"] = ackType;
+        event["seq"] = static_cast<qint64>(seq);
+        event["code"] = -4;
+        event["message"] = QStringLiteral("ACK has no pending command");
+        event["timestamp_ms"] = receivedAtMs;
+        event["ack"] = message;
+        emit systemStatusReceived(event);
+        return;
+    }
+
+    const PendingAck pending = it.value();
+    m_pendingAcks.erase(it);
+    m_stats.ackReceivedCount++;
+
+    if (ackType != pending.ackType) {
+        QJsonObject mismatch;
+        mismatch["type"] = "ack_mismatch";
+        mismatch["protocol_version"] = HostProtocol::ProtocolVersion;
+        mismatch["ack_type"] = ackType;
+        mismatch["expected_ack_type"] = pending.ackType;
+        mismatch["seq"] = static_cast<qint64>(pending.seq);
+        mismatch["code"] = -5;
+        mismatch["message"] = QStringLiteral("ACK type does not match pending command");
+        mismatch["timestamp_ms"] = receivedAtMs;
+        mismatch["elapsed_ms"] = receivedAtMs - pending.sentAtMs;
+        mismatch["ack"] = message;
+        emit systemStatusReceived(mismatch);
+
+        if (m_pendingAcks.isEmpty()) {
+            m_ackTimer->stop();
+        }
+
+        emitStatsUpdate();
+        return;
+    }
+
+    QJsonObject resolved = message;
+    resolved["elapsed_ms"] = receivedAtMs - pending.sentAtMs;
+    emit systemStatusReceived(resolved);
+
+    if (m_pendingAcks.isEmpty()) {
+        m_ackTimer->stop();
+    }
+
+    emitStatsUpdate();
+}
+
+void ROS1TcpClient::failPendingAck(const PendingAck &pending, const QString &eventType,
+                                   const QString &message, int code, qint64 nowMs)
+{
+    QJsonObject event;
+    event["type"] = eventType;
+    event["protocol_version"] = HostProtocol::ProtocolVersion;
+    event["ack_type"] = pending.ackType;
+    event["seq"] = static_cast<qint64>(pending.seq);
+    event["code"] = code;
+    event["message"] = message;
+    event["timestamp_ms"] = nowMs;
+    event["elapsed_ms"] = nowMs - pending.sentAtMs;
+    event["deadline_ms"] = pending.deadlineMs;
+    emit systemStatusReceived(event);
+}
+
+void ROS1TcpClient::failAllPendingAcks(const QString &eventType, const QString &message, int code)
+{
+    if (m_pendingAcks.isEmpty()) {
+        m_ackTimer->stop();
+        return;
+    }
+
+    const qint64 now = HostProtocol::nowMs();
+    const QList<PendingAck> pendingAcks = m_pendingAcks.values();
+    m_pendingAcks.clear();
+    m_ackTimer->stop();
+
+    for (const PendingAck &pending : pendingAcks) {
+        failPendingAck(pending, eventType, message, code, now);
+    }
+
+    emitStatsUpdate();
 }
 
 void ROS1TcpClient::processReceivedData()
@@ -517,7 +713,7 @@ void ROS1TcpClient::processReceivedData()
             m_lastHeartbeatAckMs = receivedAtMs;
             setHeartbeatOnline(true);
         } else if (msgType == "ack") {
-            emit systemStatusReceived(msg);
+            handleAckMessage(msg, receivedAtMs);
         } else if (msgType == "system_snapshot" || msgType == "camera_list_response"
                    || msgType == "param_response" || msgType == "emergency_state"
                    || msgType == "protocol_error") {
@@ -583,7 +779,7 @@ MotorState ROS1TcpClient::parseMotorState(const QJsonObject &json)
 
 void ROS1TcpClient::emitStatsUpdate()
 {
-    emit statsUpdated(m_stats);
+    emit statsUpdated(getStats());
 }
 
 void ROS1TcpClient::setHeartbeatOnline(bool online)

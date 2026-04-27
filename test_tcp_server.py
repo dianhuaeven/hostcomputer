@@ -4,7 +4,8 @@ TCP测试服务端 - 模拟ROS下位机
 功能:
   1. TCP 服务器监听 9090，等待上位机连接
   2. 连接后发送 motor_state / camera_info / IMU / CO2 等测试数据
-  3. 可选启动 FFmpeg RTSP 推流（需要 mediamtx + ffmpeg）
+  3. 接收 operator_input 输入快照，并对关键命令返回 ACK
+  4. 可选启动 FFmpeg RTSP 推流（需要 mediamtx + ffmpeg）
 
 用法:
   python test_tcp_server.py                # 基础TCP测试
@@ -33,6 +34,11 @@ import random
 import shutil
 import subprocess
 import math
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
 
 # ============================================
 # FFmpeg RTSP 推流
@@ -132,7 +138,30 @@ def make_camera_info(camera_id, rtsp_url, online=True, width=1280, height=720, f
 
 
 def make_heartbeat():
-    return {"type": "heartbeat", "timestamp": int(time.time())}
+    return {"type": "heartbeat", "timestamp_ms": now_ms()}
+
+
+def make_heartbeat_ack(msg):
+    return {
+        "type": "heartbeat_ack",
+        "protocol_version": 1,
+        "seq": msg.get("seq", 0),
+        "timestamp_ms": now_ms(),
+        "server_time_ms": now_ms(),
+    }
+
+
+def make_ack(msg, ok=True, code=0, message="ok"):
+    return {
+        "type": "ack",
+        "protocol_version": 1,
+        "ack_type": msg.get("type", "unknown"),
+        "seq": msg.get("seq", 0),
+        "ok": ok,
+        "code": code,
+        "message": message,
+        "timestamp_ms": now_ms(),
+    }
 
 
 # ============================================
@@ -171,19 +200,28 @@ def handle_client(conn, addr, cameras, args):
                         msg = json.loads(line)
                         msg_type = msg.get("type", "unknown")
                         if msg_type == "heartbeat":
-                            pass
-                        elif msg_type == "cmd_vel":
-                            lx = msg.get("linear_x", 0)
-                            az = msg.get("angular_z", 0)
-                            direction = ""
-                            if lx > 0: direction += "前进"
-                            elif lx < 0: direction += "后退"
-                            if az > 0: direction += "左转"
-                            elif az < 0: direction += "右转"
-                            if not direction: direction = "停止"
-                            print(f"  [cmd_vel] {direction:8s} lx={lx:+.2f} az={az:+.2f}")
+                            send_json(conn, make_heartbeat_ack(msg))
+                        elif msg_type == "operator_input":
+                            keyboard = msg.get("keyboard", {})
+                            pressed_keys = keyboard.get("pressed_keys", [])
+                            gamepad = msg.get("gamepad", {})
+                            axes = gamepad.get("axes", {})
+                            buttons = gamepad.get("buttons", {})
+                            active_buttons = [name for name, value in buttons.items() if value]
+                            print(
+                                f"  [operator_input] mode={msg.get('mode', 'unknown')} "
+                                f"seq={msg.get('seq', 0)} keys={pressed_keys} "
+                                f"buttons={active_buttons} axes={axes}"
+                            )
                         elif msg_type == "emergency_stop":
                             print(f"  [!!!急停!!!] {msg}")
+                            send_json(conn, make_ack(msg, message="emergency active"))
+                        elif msg_type == "system_command":
+                            print(f"  [system_command] {msg}")
+                            send_json(conn, make_ack(
+                                msg,
+                                message=f"system command {msg.get('command', '')} accepted"
+                            ))
                         else:
                             print(f"  [收到] {msg_type}: {str(msg)[:100]}")
         except (ConnectionResetError, ConnectionAbortedError):

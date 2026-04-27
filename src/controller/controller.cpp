@@ -190,7 +190,7 @@ quint16 Controller::getROSPort() const
 
 Controller::Statistics Controller::getTcpStatistics() const
 {
-    Statistics stats = {0, 0, 0, 0, 0, 0};
+    Statistics stats = {0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     if (m_tcpClient) {
         auto tcpStats = m_tcpClient->getStats();
@@ -200,6 +200,9 @@ Controller::Statistics Controller::getTcpStatistics() const
         stats.bytesReceived = tcpStats.bytesReceived;
         stats.connectionCount = tcpStats.connectionCount;
         stats.reconnectCount = tcpStats.reconnectCount;
+        stats.ackPendingCount = tcpStats.ackPendingCount;
+        stats.ackReceivedCount = tcpStats.ackReceivedCount;
+        stats.ackTimeoutCount = tcpStats.ackTimeoutCount;
     }
 
     return stats;
