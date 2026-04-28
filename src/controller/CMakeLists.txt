@@ -24,12 +24,16 @@ set(CONTROLLER_SOURCES
     GamepadDisplayWidget.h
     DisplayLayoutManager.cpp
     DisplayLayoutManager.h
+    FfmpegRtspDecoder.cpp
+    FfmpegRtspDecoder.h
     KeyboardController.cpp
     KeyboardController.h
     handlekey.cpp
     handlekey.h
     RtspPlayerWidget.cpp
     RtspPlayerWidget.h
+    VideoFrameWidget.cpp
+    VideoFrameWidget.h
     RobotAttitudeWidget.cpp
     RobotAttitudeWidget.h
     RobotViewModel.cpp
@@ -49,8 +53,6 @@ target_link_libraries(controller_layer PUBLIC
     Qt6::Core
     Qt6::Widgets
     Qt6::Network
-    Qt6::Multimedia
-    Qt6::MultimediaWidgets
     Qt6::Qml
     Qt6::Quick
     Qt6::QuickWidgets

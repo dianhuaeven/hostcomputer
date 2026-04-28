@@ -1,5 +1,8 @@
 #include "RtspPlayerWidget.h"
-#include <QUrl>
+
+#include "FfmpegRtspDecoder.h"
+#include "VideoFrameWidget.h"
+
 #include <QTime>
 
 RtspPlayerWidget::RtspPlayerWidget(int cameraId, QWidget *parent)
@@ -7,9 +10,8 @@ RtspPlayerWidget::RtspPlayerWidget(int cameraId, QWidget *parent)
     , m_cameraId(cameraId)
 {
     // 播放器
-    m_player = new QMediaPlayer(this);
-    m_videoWidget = new QVideoWidget(this);
-    m_player->setVideoOutput(m_videoWidget);
+    m_decoder = new FfmpegRtspDecoder(this);
+    m_videoWidget = new VideoFrameWidget(this);
     m_videoWidget->hide();
     m_videoWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
@@ -87,19 +89,35 @@ RtspPlayerWidget::RtspPlayerWidget(int cameraId, QWidget *parent)
 
     connect(m_startBtn, &QPushButton::clicked, this, &RtspPlayerWidget::startVideo);
     connect(m_stopBtn, &QPushButton::clicked, this, &RtspPlayerWidget::stopVideo);
+    connect(m_decoder, &FfmpegRtspDecoder::frameReady,
+            m_videoWidget, &VideoFrameWidget::setFrame);
+    connect(m_decoder, &FfmpegRtspDecoder::started,
+            this, &RtspPlayerWidget::onDecoderStarted);
+    connect(m_decoder, &FfmpegRtspDecoder::stopped,
+            this, &RtspPlayerWidget::onDecoderStopped);
+    connect(m_decoder, &FfmpegRtspDecoder::failed,
+            this, &RtspPlayerWidget::onDecoderFailed);
 }
 
 RtspPlayerWidget::~RtspPlayerWidget()
 {
     m_clockTimer->stop();
-    m_player->stop();
+    m_decoder->stop();
 }
 
 void RtspPlayerWidget::setCameraInfo(const QString &rtspUrl, bool online,
                                       const QString &codec, int width, int height,
                                       int fps, int bitrateKbps)
 {
+    const bool streamChanged = m_rtspUrl != rtspUrl
+        || m_streamWidth != width
+        || m_streamHeight != height;
+
     m_rtspUrl = rtspUrl;
+    m_streamWidth = width;
+    m_streamHeight = height;
+    m_streamFps = fps;
+    m_streamOnline = online;
 
     // 更新信息标签
     m_infoLabel->setText(QString("%1x%2 %3 %4fps %5kbps")
@@ -109,8 +127,9 @@ void RtspPlayerWidget::setCameraInfo(const QString &rtspUrl, bool online,
         m_statusLabel->setText("在线");
         m_statusLabel->setStyleSheet("color: #00cc66; font-size: 12px;");
         m_startBtn->setEnabled(true);
-        // 自动开始播放
-        startVideo();
+        if (streamChanged || !m_decoder->isRunning()) {
+            startVideo();
+        }
     } else {
         m_statusLabel->setText("离线");
         m_statusLabel->setStyleSheet("color: #ff4444; font-size: 12px;");
@@ -121,10 +140,16 @@ void RtspPlayerWidget::setCameraInfo(const QString &rtspUrl, bool online,
 
 void RtspPlayerWidget::startVideo()
 {
-    if (m_rtspUrl.isEmpty()) return;
+    if (m_rtspUrl.isEmpty()) {
+        return;
+    }
+    if (m_streamWidth <= 0 || m_streamHeight <= 0) {
+        onDecoderFailed(QString("视频尺寸无效: %1x%2").arg(m_streamWidth).arg(m_streamHeight));
+        return;
+    }
 
-    m_player->setSource(QUrl(m_rtspUrl));
-    m_player->play();
+    m_waitLabel->setText("连接视频...");
+    m_decoder->start(m_rtspUrl, m_streamWidth, m_streamHeight, m_streamFps);
 
     m_waitLabel->hide();
     m_videoWidget->show();
@@ -141,11 +166,12 @@ void RtspPlayerWidget::startVideo()
 
 void RtspPlayerWidget::stopVideo()
 {
-    m_player->stop();
-    m_player->setSource(QUrl());
+    m_decoder->stop();
+    m_videoWidget->clearFrame();
 
     m_videoWidget->hide();
     m_waitLabel->show();
+    m_waitLabel->setText("等待视频输入...");
     m_stopBtn->setEnabled(false);
     if (!m_rtspUrl.isEmpty()) {
         m_startBtn->setEnabled(true);
@@ -154,6 +180,37 @@ void RtspPlayerWidget::stopVideo()
     m_statusLabel->setStyleSheet("color: #ffaa00; font-size: 12px;");
 
     // 停止时钟
+    m_clockTimer->stop();
+    m_localClockLabel->hide();
+}
+
+void RtspPlayerWidget::onDecoderStarted()
+{
+    m_waitLabel->hide();
+    m_videoWidget->show();
+    m_startBtn->setEnabled(false);
+    m_stopBtn->setEnabled(true);
+    m_statusLabel->setText("低延迟播放中");
+    m_statusLabel->setStyleSheet("color: #00cc66; font-size: 12px;");
+}
+
+void RtspPlayerWidget::onDecoderStopped()
+{
+    if (m_streamOnline && !m_rtspUrl.isEmpty()) {
+        m_startBtn->setEnabled(true);
+    }
+    m_stopBtn->setEnabled(false);
+}
+
+void RtspPlayerWidget::onDecoderFailed(const QString &message)
+{
+    m_videoWidget->hide();
+    m_waitLabel->show();
+    m_waitLabel->setText(message);
+    m_startBtn->setEnabled(m_streamOnline && !m_rtspUrl.isEmpty());
+    m_stopBtn->setEnabled(false);
+    m_statusLabel->setText("播放错误");
+    m_statusLabel->setStyleSheet("color: #ff4444; font-size: 12px;");
     m_clockTimer->stop();
     m_localClockLabel->hide();
 }

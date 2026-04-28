@@ -19,8 +19,6 @@ find_package(Qt6 QUIET COMPONENTS
     Core
     Widgets
     Network
-    Multimedia
-    MultimediaWidgets
     Qml
     Quick           # <-- 确保添加
     QuickWidgets    # <-- 用于在 Widget 中嵌入 QML
@@ -32,8 +30,6 @@ if(NOT Qt6_FOUND)
         Core
         Widgets
         Network
-        Multimedia
-        MultimediaWidgets
     )
     set(QT_VERSION 5)
 else()
@@ -112,8 +108,6 @@ if(QT_VERSION EQUAL 6)
         Qt6::Core
         Qt6::Widgets
         Qt6::Network
-        Qt6::Multimedia
-        Qt6::MultimediaWidgets
     )
     # 添加可选的Qt6模块
     if(TARGET Qt6::Quick)
@@ -141,8 +135,6 @@ else()
         Qt5::Core
         Qt5::Widgets
         Qt5::Network
-        Qt5::Multimedia
-        Qt5::MultimediaWidgets
     )
 endif()
 

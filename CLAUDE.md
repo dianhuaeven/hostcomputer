@@ -76,7 +76,7 @@ ninja
 - **`Controller`**：业务逻辑核心，封装所有与下位机交互的命令接口
 - **`KeyboardController`**：采集键盘输入并输出协议层按键名（车体/机械臂双模式）
 - **`HandleKey`**：XInput手柄驱动，轮询手柄状态并发出`ControllerState`信号
-- **`RtspPlayerWidget`**：基于`QMediaPlayer`的RTSP视频播放控件，5路并发
+- **`RtspPlayerWidget`**：基于 FFmpeg 子进程低缓冲拉流的 RTSP 视频播放控件，5 路并发
 - **`DisplayLayoutManager`**：管理2×3视频网格布局
 - **`RobotViewModel`**：QML与C++桥接，暴露Roll/Pitch/Yaw属性给3D姿态视图
 
@@ -87,7 +87,8 @@ ninja
 ## 技术栈
 
 - Qt 6.8.3 (MinGW 64-bit), C++20, CMake 3.16+
-- Qt模块：Core, Widgets, Network, Multimedia, MultimediaWidgets, Quick, QuickWidgets
+- Qt模块：Core, Widgets, Network, Quick, QuickWidgets
+- 运行时工具：FFmpeg 可执行文件用于 RTSP 低延迟播放和下位机推流
 - Windows XInput（手柄支持）
 - QML用于3D机器人姿态渲染（`resources/qml/RobotView.qml`）
 
