@@ -1,6 +1,12 @@
 import os
+import shlex
+import subprocess
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+from bridge_protocol import now_ms
+from debug_events import EventSink, NullEventSink
 
 try:
     import yaml
@@ -83,6 +89,226 @@ class VideoConfig:
 
     def camera_infos(self) -> List[Dict[str, Any]]:
         return [source.camera_info(self.rtsp, online=False) for source in self.direct_sources]
+
+
+@dataclass
+class DirectSourceRuntime:
+    source: DirectVideoSource
+    online: bool = False
+    last_error: str = ""
+    process: Optional[subprocess.Popen] = None
+    started_at_ms: int = 0
+    stopped_at_ms: int = 0
+    restart_count: int = 0
+    last_exit_code: Optional[int] = None
+    command: List[str] = field(default_factory=list)
+
+    def camera_info(self, rtsp: RtspConfig) -> Dict[str, Any]:
+        info = self.source.camera_info(rtsp, online=self.online, last_error=self.last_error)
+        info["pid"] = self.process.pid if self.process and self.process.poll() is None else 0
+        info["started_at_ms"] = self.started_at_ms
+        info["stopped_at_ms"] = self.stopped_at_ms
+        info["restart_count"] = self.restart_count
+        info["last_exit_code"] = self.last_exit_code
+        info["command"] = " ".join(shlex.quote(part) for part in self.command)
+        return info
+
+
+class VideoManager:
+    def __init__(
+        self,
+        config: VideoConfig,
+        dry_run: bool = False,
+        events: Optional[EventSink] = None,
+    ) -> None:
+        self.config = config
+        self.dry_run = dry_run
+        self.events = events or NullEventSink()
+        self._lock = threading.RLock()
+        self._runtime: Dict[int, DirectSourceRuntime] = {
+            source.camera_id: DirectSourceRuntime(source=source)
+            for source in config.direct_sources
+        }
+
+    @classmethod
+    def from_config_path(
+        cls,
+        path: str,
+        dry_run: bool = False,
+        events: Optional[EventSink] = None,
+    ) -> "VideoManager":
+        return cls(load_video_config(path), dry_run=dry_run, events=events)
+
+    def start_enabled(self) -> List[Dict[str, Any]]:
+        changed: List[Dict[str, Any]] = []
+        for source in self.config.direct_sources:
+            if source.enabled:
+                changed.append(self.start(source.camera_id))
+        return changed
+
+    def stop_all(self) -> List[Dict[str, Any]]:
+        changed: List[Dict[str, Any]] = []
+        for camera_id in list(self._runtime.keys()):
+            changed.append(self.stop(camera_id))
+        return changed
+
+    def start(self, camera_id: int) -> Dict[str, Any]:
+        with self._lock:
+            runtime = self._get_runtime(camera_id)
+            self._refresh_runtime_locked(runtime)
+            if runtime.online:
+                return runtime.camera_info(self.config.rtsp)
+
+            command = self.build_ffmpeg_command(runtime.source)
+            runtime.command = command
+            runtime.last_error = ""
+            runtime.last_exit_code = None
+            runtime.started_at_ms = now_ms()
+            runtime.stopped_at_ms = 0
+
+            if self.dry_run:
+                runtime.online = True
+                runtime.process = None
+                self.events.emit("video", "dry-run stream started", data={
+                    "camera_id": camera_id,
+                    "command": runtime.camera_info(self.config.rtsp)["command"],
+                })
+                return runtime.camera_info(self.config.rtsp)
+
+            try:
+                runtime.process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                runtime.online = True
+                self.events.emit("video", "stream process started", data={
+                    "camera_id": camera_id,
+                    "pid": runtime.process.pid,
+                })
+            except OSError as exc:
+                runtime.online = False
+                runtime.process = None
+                runtime.last_error = str(exc)
+                runtime.stopped_at_ms = now_ms()
+                self.events.emit("video", "stream process failed to start", level="error", data={
+                    "camera_id": camera_id,
+                    "error": str(exc),
+                })
+
+            return runtime.camera_info(self.config.rtsp)
+
+    def stop(self, camera_id: int) -> Dict[str, Any]:
+        with self._lock:
+            runtime = self._get_runtime(camera_id)
+            process = runtime.process
+            if process and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2.0)
+            runtime.process = None
+            runtime.online = False
+            runtime.stopped_at_ms = now_ms()
+            runtime.last_exit_code = process.returncode if process else runtime.last_exit_code
+            self.events.emit("video", "stream stopped", data={"camera_id": camera_id})
+            return runtime.camera_info(self.config.rtsp)
+
+    def restart(self, camera_id: int) -> Dict[str, Any]:
+        with self._lock:
+            runtime = self._get_runtime(camera_id)
+            runtime.restart_count += 1
+        self.stop(camera_id)
+        return self.start(camera_id)
+
+    def camera_infos(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            self.refresh()
+            return [
+                self._runtime[source.camera_id].camera_info(self.config.rtsp)
+                for source in self.config.direct_sources
+            ]
+
+    def refresh(self) -> List[Dict[str, Any]]:
+        changed: List[Dict[str, Any]] = []
+        with self._lock:
+            for runtime in self._runtime.values():
+                before = runtime.online
+                self._refresh_runtime_locked(runtime)
+                if runtime.online != before:
+                    changed.append(runtime.camera_info(self.config.rtsp))
+        return changed
+
+    def build_ffmpeg_command(self, source: DirectVideoSource) -> List[str]:
+        output_url = self.config.rtsp.publish_url(source.rtsp_path)
+        command = [
+            source.ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-f",
+            "v4l2",
+        ]
+        if source.input_format:
+            command += ["-input_format", source.input_format]
+        command += [
+            "-video_size",
+            f"{source.width}x{source.height}",
+            "-framerate",
+            str(source.fps),
+        ]
+        command += list(source.extra_input_args)
+        command += ["-i", source.device, "-an"]
+        command += self._ffmpeg_codec_args(source)
+        command += list(source.extra_output_args)
+        command += ["-f", "rtsp", output_url]
+        return command
+
+    def _ffmpeg_codec_args(self, source: DirectVideoSource) -> List[str]:
+        codec = source.codec.lower()
+        if codec in ("copy", "passthrough"):
+            return ["-c:v", "copy"]
+        if codec in ("h264", "libx264"):
+            return [
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-g",
+                str(max(source.fps, 1)),
+                "-b:v",
+                f"{source.bitrate_kbps}k",
+            ]
+        if codec in ("mjpeg", "mjpg"):
+            return ["-c:v", "mjpeg", "-q:v", "5"]
+        return ["-c:v", source.codec, "-b:v", f"{source.bitrate_kbps}k"]
+
+    def _refresh_runtime_locked(self, runtime: DirectSourceRuntime) -> None:
+        process = runtime.process
+        if self.dry_run or not process:
+            return
+        exit_code = process.poll()
+        if exit_code is None:
+            runtime.online = True
+            return
+        runtime.online = False
+        runtime.last_exit_code = exit_code
+        runtime.process = None
+        runtime.stopped_at_ms = now_ms()
+        runtime.last_error = f"ffmpeg exited with code {exit_code}"
+        self.events.emit("video", "stream process exited", level="warning", data={
+            "camera_id": runtime.source.camera_id,
+            "exit_code": exit_code,
+        })
+
+    def _get_runtime(self, camera_id: int) -> DirectSourceRuntime:
+        if camera_id not in self._runtime:
+            raise KeyError(f"unknown camera_id: {camera_id}")
+        return self._runtime[camera_id]
 
 
 def load_video_config(path: str) -> VideoConfig:
