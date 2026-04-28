@@ -11,6 +11,7 @@ from bridge_protocol import json_line
 from debug_ui import DebugHttpServer
 from debug_events import EventSink, RingBufferEventSink
 from output_adapters import DryRunOutput, OutputAdapter, RosOutput
+from video_manager import VideoConfigError, VideoManager
 
 
 class HostBridgeServer:
@@ -27,6 +28,7 @@ class HostBridgeServer:
         gripper_max_position: float = 0.044,
         gripper_initial_position: float = 0.022,
         cameras: Optional[List[Dict[str, Any]]] = None,
+        video_manager: Optional[VideoManager] = None,
         events: Optional[EventSink] = None,
     ) -> None:
         self.host = host
@@ -35,6 +37,7 @@ class HostBridgeServer:
         self.client_lock = threading.Lock()
         self.active_clients: List["BridgeClient"] = []
         self.events = events or RingBufferEventSink()
+        self.video_manager = video_manager
         self.core = BridgeCore(
             output,
             watchdog_ms,
@@ -45,6 +48,7 @@ class HostBridgeServer:
             gripper_max_position,
             gripper_initial_position,
             cameras,
+            self.video_manager.camera_infos if self.video_manager else None,
             self.events,
         )
         self.runtime = BridgeRuntime(self.core, self.broadcast)
@@ -201,6 +205,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=parse_camera,
         help="camera entry as id,name,rtsp_url; may be repeated",
     )
+    parser.add_argument("--video-config", default="", help="YAML config for direct RTSP video sources")
+    parser.add_argument(
+        "--video-dry-run",
+        action="store_true",
+        help="build video commands and mark streams online without starting ffmpeg",
+    )
     return parser
 
 
@@ -218,6 +228,22 @@ def main() -> None:
     else:
         output = DryRunOutput(events)
 
+    video_manager: Optional[VideoManager] = None
+    if args.video_config:
+        try:
+            video_manager = VideoManager.from_config_path(
+                args.video_config,
+                dry_run=args.video_dry_run,
+                events=events,
+            )
+            events.emit("video", "video manager configured", data={
+                "config": args.video_config,
+                "dry_run": args.video_dry_run,
+                "sources": len(video_manager.config.direct_sources),
+            })
+        except VideoConfigError as exc:
+            raise SystemExit(f"failed to load video config: {exc}") from exc
+
     server = HostBridgeServer(
         host=args.host,
         port=args.port,
@@ -230,6 +256,7 @@ def main() -> None:
         gripper_max_position=args.gripper_max_position,
         gripper_initial_position=args.gripper_initial_position,
         cameras=args.camera,
+        video_manager=video_manager,
         events=events,
     )
     if args.debug_ui:

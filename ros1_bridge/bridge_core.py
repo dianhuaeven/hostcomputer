@@ -41,6 +41,7 @@ class BridgeCore:
         gripper_max_position: float = 0.044,
         gripper_initial_position: float = 0.022,
         cameras: Optional[List[Dict[str, Any]]] = None,
+        camera_provider: Optional[Callable[[], List[Dict[str, Any]]]] = None,
         events: Optional[EventSink] = None,
     ) -> None:
         self.output = output
@@ -59,6 +60,7 @@ class BridgeCore:
         self.gripper_min_position = gripper_min_position
         self.gripper_max_position = gripper_max_position
         self.cameras = cameras if cameras is not None else self.default_cameras()
+        self.camera_provider = camera_provider
         self.state = BridgeState(
             control_mode=self.MODE_VEHICLE,
             gripper_target=self.clamp_gripper(gripper_initial_position),
@@ -140,10 +142,11 @@ class BridgeCore:
                     "gripper": {"open": "f", "close": "h"},
                 },
             },
-            "cameras": self.cameras,
+            "cameras": self.current_cameras(),
         }
 
     def make_system_snapshot(self, seq: int) -> Dict[str, Any]:
+        cameras = self.current_cameras()
         with self.state_lock:
             return {
                 "type": "system_snapshot",
@@ -162,7 +165,7 @@ class BridgeCore:
                 "modules": {
                     "base": "online",
                     "arm": "online",
-                    "camera": "online" if any(cam.get("online", False) for cam in self.cameras) else "offline",
+                    "camera": "online" if any(cam.get("online", False) for cam in cameras) else "offline",
                 },
                 "last_error": {
                     "code": self.state.last_error_code,
@@ -182,16 +185,21 @@ class BridgeCore:
             "protocol_version": PROTOCOL_VERSION,
             "seq": seq,
             "timestamp_ms": now_ms(),
-            "cameras": self.cameras,
+            "cameras": self.current_cameras(),
         }
 
     def state_snapshot(self) -> Dict[str, Any]:
         with self.state_lock:
             state = self.state.to_dict()
-        state["cameras"] = self.cameras
+        state["cameras"] = self.current_cameras()
         state["watchdog_ms"] = self.watchdog_ms
         state["max_frame_bytes"] = MAX_FRAME_BYTES
         return state
+
+    def current_cameras(self) -> List[Dict[str, Any]]:
+        if self.camera_provider is None:
+            return list(self.cameras)
+        return self.camera_provider()
 
     def make_ack(self, msg: Dict[str, Any], ok: bool = True, code: int = 0, message: str = "ok") -> Dict[str, Any]:
         return {
@@ -284,7 +292,8 @@ class BridgeCore:
             return
 
         if msg_type == "camera_list_request":
-            self.events.emit("camera", "camera list requested", data={"seq": seq, "count": len(self.cameras)})
+            cameras = self.current_cameras()
+            self.events.emit("camera", "camera list requested", data={"seq": seq, "count": len(cameras)})
             yield self.make_camera_list_response(seq)
             return
 
