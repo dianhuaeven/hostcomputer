@@ -225,7 +225,6 @@ class VideoManager:
 
     def camera_infos(self) -> List[Dict[str, Any]]:
         with self._lock:
-            self.refresh()
             return [
                 self._runtime[source.camera_id].camera_info(self.config.rtsp)
                 for source in self.config.direct_sources

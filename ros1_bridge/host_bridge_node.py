@@ -29,6 +29,8 @@ class HostBridgeServer:
         gripper_initial_position: float = 0.022,
         cameras: Optional[List[Dict[str, Any]]] = None,
         video_manager: Optional[VideoManager] = None,
+        video_autostart: bool = False,
+        video_poll_sec: float = 1.0,
         events: Optional[EventSink] = None,
     ) -> None:
         self.host = host
@@ -38,6 +40,8 @@ class HostBridgeServer:
         self.active_clients: List["BridgeClient"] = []
         self.events = events or RingBufferEventSink()
         self.video_manager = video_manager
+        self.video_autostart = video_autostart
+        self.video_poll_sec = max(video_poll_sec, 0.1)
         self.core = BridgeCore(
             output,
             watchdog_ms,
@@ -54,22 +58,47 @@ class HostBridgeServer:
         self.runtime = BridgeRuntime(self.core, self.broadcast)
 
     def serve_forever(self) -> None:
+        self.start_video_manager()
         self.runtime.start_watchdog()
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server.bind((self.host, self.port))
-            server.listen(5)
-            print(f"[bridge] listening on {self.host}:{self.port}", flush=True)
-            self.events.emit("tcp", "bridge listening", data={"host": self.host, "port": self.port})
-            while not self.stop_event.is_set():
-                try:
-                    conn, addr = server.accept()
-                except OSError:
-                    break
-                client = BridgeClient(self, conn, addr)
-                with self.client_lock:
-                    self.active_clients.append(client)
-                threading.Thread(target=client.run, daemon=True).start()
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                server.bind((self.host, self.port))
+                server.listen(5)
+                print(f"[bridge] listening on {self.host}:{self.port}", flush=True)
+                self.events.emit("tcp", "bridge listening", data={"host": self.host, "port": self.port})
+                while not self.stop_event.is_set():
+                    try:
+                        conn, addr = server.accept()
+                    except OSError:
+                        break
+                    client = BridgeClient(self, conn, addr)
+                    with self.client_lock:
+                        self.active_clients.append(client)
+                    threading.Thread(target=client.run, daemon=True).start()
+        finally:
+            self.stop_video_manager()
+
+    def start_video_manager(self) -> None:
+        if not self.video_manager:
+            return
+        if self.video_autostart:
+            started = self.video_manager.start_enabled()
+            self.events.emit("video", "video autostart completed", data={"count": len(started)})
+        threading.Thread(target=self._video_monitor_loop, daemon=True).start()
+
+    def stop_video_manager(self) -> None:
+        if not self.video_manager:
+            return
+        stopped = self.video_manager.stop_all()
+        self.events.emit("video", "video manager stopped", data={"count": len(stopped)})
+
+    def _video_monitor_loop(self) -> None:
+        if not self.video_manager:
+            return
+        while not self.stop_event.wait(self.video_poll_sec):
+            for camera in self.video_manager.refresh():
+                self.broadcast(self.core.make_camera_info(camera))
 
     def remove_client(self, client: "BridgeClient") -> None:
         with self.client_lock:
@@ -211,6 +240,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="build video commands and mark streams online without starting ffmpeg",
     )
+    parser.add_argument(
+        "--video-autostart",
+        action="store_true",
+        help="start enabled direct video sources when the bridge starts",
+    )
+    parser.add_argument("--video-poll-sec", type=float, default=1.0)
     return parser
 
 
@@ -257,6 +292,8 @@ def main() -> None:
         gripper_initial_position=args.gripper_initial_position,
         cameras=args.camera,
         video_manager=video_manager,
+        video_autostart=args.video_autostart,
+        video_poll_sec=args.video_poll_sec,
         events=events,
     )
     if args.debug_ui:

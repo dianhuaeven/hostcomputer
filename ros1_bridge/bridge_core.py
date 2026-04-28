@@ -188,6 +188,14 @@ class BridgeCore:
             "cameras": self.current_cameras(),
         }
 
+    def make_camera_info(self, camera: Dict[str, Any]) -> Dict[str, Any]:
+        message = dict(camera)
+        message["type"] = "camera_info"
+        message["protocol_version"] = PROTOCOL_VERSION
+        message["seq"] = 0
+        message["timestamp_ms"] = now_ms()
+        return message
+
     def state_snapshot(self) -> Dict[str, Any]:
         with self.state_lock:
             state = self.state.to_dict()
