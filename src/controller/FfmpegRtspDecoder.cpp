@@ -2,7 +2,9 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
+#include <QMutexLocker>
 #include <QStandardPaths>
 
 namespace {
@@ -15,19 +17,7 @@ constexpr int kStderrLimit = 4000;
 
 FfmpegRtspDecoder::FfmpegRtspDecoder(QObject *parent)
     : QObject(parent)
-    , m_process(new QProcess(this))
 {
-    m_process->setProcessChannelMode(QProcess::SeparateChannels);
-
-    connect(m_process, &QProcess::started, this, &FfmpegRtspDecoder::started);
-    connect(m_process, &QProcess::readyReadStandardOutput,
-            this, &FfmpegRtspDecoder::onReadyReadStandardOutput);
-    connect(m_process, &QProcess::readyReadStandardError,
-            this, &FfmpegRtspDecoder::onReadyReadStandardError);
-    connect(m_process, &QProcess::errorOccurred,
-            this, &FfmpegRtspDecoder::onProcessError);
-    connect(m_process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-            this, &FfmpegRtspDecoder::onProcessFinished);
 }
 
 FfmpegRtspDecoder::~FfmpegRtspDecoder()
@@ -37,7 +27,7 @@ FfmpegRtspDecoder::~FfmpegRtspDecoder()
 
 bool FfmpegRtspDecoder::isRunning() const
 {
-    return m_process->state() != QProcess::NotRunning;
+    return m_workerThread && m_workerThread->isRunning();
 }
 
 void FfmpegRtspDecoder::start(const QString &rtspUrl, int width, int height, int fps)
@@ -63,91 +53,54 @@ void FfmpegRtspDecoder::start(const QString &rtspUrl, int width, int height, int
     m_height = height;
     m_fps = fps > 0 ? fps : 30;
     m_frameBytes = static_cast<int>(frameBytes);
-    m_stdoutBuffer.clear();
-    m_stderrBuffer.clear();
-    m_stopRequested = false;
+    m_stopRequested.store(false);
+    {
+        QMutexLocker locker(&m_frameMutex);
+        m_latestFrame = QImage();
+        m_hasNewFrame = false;
+    }
 
-    m_process->start(ffmpegProgram(), ffmpegArguments(rtspUrl), QIODevice::ReadOnly);
+    const QString program = ffmpegProgram();
+    const QStringList arguments = ffmpegArguments(rtspUrl);
+    m_workerThread = QThread::create([this, program, arguments, width, height, frameBytes = m_frameBytes]() {
+        decoderLoop(program, arguments, width, height, frameBytes);
+    });
+    m_workerThread->start();
 }
 
 void FfmpegRtspDecoder::stop()
 {
-    m_stopRequested = true;
-    m_stdoutBuffer.clear();
+    m_stopRequested.store(true);
+    if (m_workerThread) {
+        m_workerThread->requestInterruption();
+        m_workerThread->wait(2000);
+        delete m_workerThread;
+        m_workerThread = nullptr;
+    }
 
-    if (m_process->state() != QProcess::NotRunning) {
-        m_process->terminate();
-        if (!m_process->waitForFinished(800)) {
-            m_process->kill();
-            m_process->waitForFinished(800);
-        }
+    {
+        QMutexLocker locker(&m_frameMutex);
+        m_latestFrame = QImage();
+        m_hasNewFrame = false;
     }
 
     emit stopped();
 }
 
-void FfmpegRtspDecoder::onReadyReadStandardOutput()
+bool FfmpegRtspDecoder::takeLatestFrame(QImage *frame)
 {
-    if (m_frameBytes <= 0) {
-        m_process->readAllStandardOutput();
-        return;
+    if (!frame) {
+        return false;
     }
 
-    m_stdoutBuffer += m_process->readAllStandardOutput();
-    const int completeFrames = m_stdoutBuffer.size() / m_frameBytes;
-    if (completeFrames <= 0) {
-        return;
+    QMutexLocker locker(&m_frameMutex);
+    if (!m_hasNewFrame || m_latestFrame.isNull()) {
+        return false;
     }
 
-    const int latestOffset = (completeFrames - 1) * m_frameBytes;
-    const QByteArray latestFrame = m_stdoutBuffer.mid(latestOffset, m_frameBytes);
-    m_stdoutBuffer.remove(0, completeFrames * m_frameBytes);
-
-    QImage frame(reinterpret_cast<const uchar *>(latestFrame.constData()),
-                 m_width,
-                 m_height,
-                 m_width * kBytesPerPixel,
-                 QImage::Format_RGB888);
-    emit frameReady(frame.copy());
-}
-
-void FfmpegRtspDecoder::onReadyReadStandardError()
-{
-    m_stderrBuffer += QString::fromLocal8Bit(m_process->readAllStandardError());
-    if (m_stderrBuffer.size() > kStderrLimit) {
-        m_stderrBuffer = m_stderrBuffer.right(kStderrLimit);
-    }
-}
-
-void FfmpegRtspDecoder::onProcessError(QProcess::ProcessError error)
-{
-    if (m_stopRequested) {
-        return;
-    }
-
-    if (error == QProcess::FailedToStart) {
-        emit failed(QStringLiteral("无法启动 ffmpeg，请确认 ffmpeg 在 PATH 中，或设置 HOSTCOMPUTER_FFMPEG_PATH"));
-        return;
-    }
-
-    emit failed(QStringLiteral("ffmpeg 进程错误: %1").arg(m_process->errorString()));
-}
-
-void FfmpegRtspDecoder::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus)
-{
-    m_stdoutBuffer.clear();
-
-    if (m_stopRequested) {
-        return;
-    }
-
-    const QString status = exitStatus == QProcess::CrashExit
-        ? QStringLiteral("崩溃")
-        : QStringLiteral("退出");
-    emit failed(QStringLiteral("ffmpeg %1，code=%2%3")
-                    .arg(status)
-                    .arg(exitCode)
-                    .arg(stderrTail()));
+    *frame = m_latestFrame;
+    m_hasNewFrame = false;
+    return true;
 }
 
 QString FfmpegRtspDecoder::ffmpegProgram() const
@@ -173,8 +126,6 @@ QString FfmpegRtspDecoder::ffmpegProgram() const
 
 QStringList FfmpegRtspDecoder::ffmpegArguments(const QString &rtspUrl) const
 {
-    Q_UNUSED(m_fps)
-
     return {
         QStringLiteral("-hide_banner"),
         QStringLiteral("-loglevel"),
@@ -185,6 +136,12 @@ QStringList FfmpegRtspDecoder::ffmpegArguments(const QString &rtspUrl) const
         QStringLiteral("nobuffer"),
         QStringLiteral("-flags"),
         QStringLiteral("low_delay"),
+        QStringLiteral("-avioflags"),
+        QStringLiteral("direct"),
+        QStringLiteral("-max_delay"),
+        QStringLiteral("0"),
+        QStringLiteral("-reorder_queue_size"),
+        QStringLiteral("0"),
         QStringLiteral("-analyzeduration"),
         QStringLiteral("0"),
         QStringLiteral("-probesize"),
@@ -202,9 +159,87 @@ QStringList FfmpegRtspDecoder::ffmpegArguments(const QString &rtspUrl) const
     };
 }
 
-QString FfmpegRtspDecoder::stderrTail() const
+void FfmpegRtspDecoder::decoderLoop(const QString &program, const QStringList &arguments,
+                                    int width, int height, int frameBytes)
 {
-    const QString tail = m_stderrBuffer.trimmed();
+    QProcess process;
+    process.setProcessChannelMode(QProcess::SeparateChannels);
+    process.start(program, arguments, QIODevice::ReadOnly);
+
+    if (!process.waitForStarted(3000)) {
+        if (!m_stopRequested.load()) {
+            emit failed(QStringLiteral("无法启动 ffmpeg，请确认 ffmpeg 在 PATH 中，或设置 HOSTCOMPUTER_FFMPEG_PATH"));
+        }
+        return;
+    }
+
+    emit started();
+
+    QByteArray stdoutBuffer;
+    QString stderrBuffer;
+
+    while (!m_stopRequested.load() && !QThread::currentThread()->isInterruptionRequested()) {
+        const bool hasData = process.waitForReadyRead(20);
+        if (hasData) {
+            stdoutBuffer += process.readAllStandardOutput();
+        }
+
+        const QByteArray stderrChunk = process.readAllStandardError();
+        if (!stderrChunk.isEmpty()) {
+            stderrBuffer += QString::fromLocal8Bit(stderrChunk);
+            if (stderrBuffer.size() > kStderrLimit) {
+                stderrBuffer = stderrBuffer.right(kStderrLimit);
+            }
+        }
+
+        const int completeFrames = stdoutBuffer.size() / frameBytes;
+        if (completeFrames > 0) {
+            const int latestOffset = (completeFrames - 1) * frameBytes;
+            const QByteArray latestFrame = stdoutBuffer.mid(latestOffset, frameBytes);
+            stdoutBuffer.remove(0, completeFrames * frameBytes);
+            storeLatestFrame(latestFrame, width, height);
+        }
+
+        if (process.state() == QProcess::NotRunning) {
+            break;
+        }
+    }
+
+    if (process.state() != QProcess::NotRunning) {
+        process.terminate();
+        if (!process.waitForFinished(800)) {
+            process.kill();
+            process.waitForFinished(800);
+        }
+    }
+
+    if (!m_stopRequested.load()) {
+        const QString status = process.exitStatus() == QProcess::CrashExit
+            ? QStringLiteral("崩溃")
+            : QStringLiteral("退出");
+        emit failed(QStringLiteral("ffmpeg %1，code=%2%3")
+                        .arg(status)
+                        .arg(process.exitCode())
+                        .arg(stderrTail(stderrBuffer)));
+    }
+}
+
+void FfmpegRtspDecoder::storeLatestFrame(const QByteArray &rawFrame, int width, int height)
+{
+    QImage frame(reinterpret_cast<const uchar *>(rawFrame.constData()),
+                 width,
+                 height,
+                 width * kBytesPerPixel,
+                 QImage::Format_RGB888);
+
+    QMutexLocker locker(&m_frameMutex);
+    m_latestFrame = frame.copy();
+    m_hasNewFrame = true;
+}
+
+QString FfmpegRtspDecoder::stderrTail(const QString &stderrBuffer)
+{
+    const QString tail = stderrBuffer.trimmed();
     if (tail.isEmpty()) {
         return QString();
     }

@@ -31,6 +31,7 @@ public slots:
 
 private slots:
     void updateLocalClock();
+    void updateVideoFrame();
     void onDecoderStarted();
     void onDecoderStopped();
     void onDecoderFailed(const QString &message);
@@ -53,6 +54,7 @@ private:
     QPushButton *m_startBtn;
     QPushButton *m_stopBtn;
     QTimer *m_clockTimer;        // 刷新本地时钟的定时器
+    QTimer *m_frameTimer;        // 从解码线程取最新帧的定时器
 };
 
 #endif // RTSPPLAYERWIDGET_H

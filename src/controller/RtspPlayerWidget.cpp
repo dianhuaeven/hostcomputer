@@ -43,6 +43,10 @@ RtspPlayerWidget::RtspPlayerWidget(int cameraId, QWidget *parent)
     m_clockTimer->setInterval(10);
     connect(m_clockTimer, &QTimer::timeout, this, &RtspPlayerWidget::updateLocalClock);
 
+    m_frameTimer = new QTimer(this);
+    m_frameTimer->setInterval(30);
+    connect(m_frameTimer, &QTimer::timeout, this, &RtspPlayerWidget::updateVideoFrame);
+
     // 按钮
     m_startBtn = new QPushButton("启动", this);
     m_stopBtn = new QPushButton("停止", this);
@@ -89,8 +93,6 @@ RtspPlayerWidget::RtspPlayerWidget(int cameraId, QWidget *parent)
 
     connect(m_startBtn, &QPushButton::clicked, this, &RtspPlayerWidget::startVideo);
     connect(m_stopBtn, &QPushButton::clicked, this, &RtspPlayerWidget::stopVideo);
-    connect(m_decoder, &FfmpegRtspDecoder::frameReady,
-            m_videoWidget, &VideoFrameWidget::setFrame);
     connect(m_decoder, &FfmpegRtspDecoder::started,
             this, &RtspPlayerWidget::onDecoderStarted);
     connect(m_decoder, &FfmpegRtspDecoder::stopped,
@@ -102,6 +104,7 @@ RtspPlayerWidget::RtspPlayerWidget(int cameraId, QWidget *parent)
 RtspPlayerWidget::~RtspPlayerWidget()
 {
     m_clockTimer->stop();
+    m_frameTimer->stop();
     m_decoder->stop();
 }
 
@@ -167,6 +170,7 @@ void RtspPlayerWidget::startVideo()
 void RtspPlayerWidget::stopVideo()
 {
     m_decoder->stop();
+    m_frameTimer->stop();
     m_videoWidget->clearFrame();
 
     m_videoWidget->hide();
@@ -184,6 +188,14 @@ void RtspPlayerWidget::stopVideo()
     m_localClockLabel->hide();
 }
 
+void RtspPlayerWidget::updateVideoFrame()
+{
+    QImage frame;
+    if (m_decoder->takeLatestFrame(&frame)) {
+        m_videoWidget->setFrame(frame);
+    }
+}
+
 void RtspPlayerWidget::onDecoderStarted()
 {
     m_waitLabel->hide();
@@ -192,6 +204,7 @@ void RtspPlayerWidget::onDecoderStarted()
     m_stopBtn->setEnabled(true);
     m_statusLabel->setText("低延迟播放中");
     m_statusLabel->setStyleSheet("color: #00cc66; font-size: 12px;");
+    m_frameTimer->start();
 }
 
 void RtspPlayerWidget::onDecoderStopped()
@@ -200,6 +213,7 @@ void RtspPlayerWidget::onDecoderStopped()
         m_startBtn->setEnabled(true);
     }
     m_stopBtn->setEnabled(false);
+    m_frameTimer->stop();
 }
 
 void RtspPlayerWidget::onDecoderFailed(const QString &message)
@@ -212,6 +226,7 @@ void RtspPlayerWidget::onDecoderFailed(const QString &message)
     m_statusLabel->setText("播放错误");
     m_statusLabel->setStyleSheet("color: #ff4444; font-size: 12px;");
     m_clockTimer->stop();
+    m_frameTimer->stop();
     m_localClockLabel->hide();
 }
 
