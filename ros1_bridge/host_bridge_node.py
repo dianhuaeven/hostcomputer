@@ -6,7 +6,7 @@ import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from bridge_core import BridgeCore, BridgeRuntime
-from bridge_protocol import DEFAULT_WATCHDOG_MS, MAX_FRAME_BYTES, PROTOCOL_VERSION
+from bridge_protocol import DEFAULT_WATCHDOG_MS, MAX_FRAME_BYTES, PROTOCOL_VERSION, now_ms
 from bridge_protocol import json_line
 from debug_ui import DebugHttpServer
 from debug_events import EventSink, RingBufferEventSink
@@ -31,6 +31,7 @@ class HostBridgeServer:
         video_manager: Optional[VideoManager] = None,
         video_autostart: bool = False,
         video_poll_sec: float = 1.0,
+        joint_runtime_topic: str = "",
         events: Optional[EventSink] = None,
     ) -> None:
         self.host = host
@@ -42,6 +43,8 @@ class HostBridgeServer:
         self.video_manager = video_manager
         self.video_autostart = video_autostart
         self.video_poll_sec = max(video_poll_sec, 0.1)
+        self.joint_runtime_topic = joint_runtime_topic
+        self.joint_runtime_subscriber = None
         self.core = BridgeCore(
             output,
             watchdog_ms,
@@ -60,6 +63,7 @@ class HostBridgeServer:
 
     def serve_forever(self) -> None:
         self.start_video_manager()
+        self.start_joint_runtime_forwarder()
         self.runtime.start_watchdog()
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
@@ -93,6 +97,42 @@ class HostBridgeServer:
             return
         stopped = self.video_manager.stop_all()
         self.events.emit("video", "video manager stopped", data={"count": len(stopped)})
+
+    def start_joint_runtime_forwarder(self) -> None:
+        topic = self.joint_runtime_topic.strip()
+        if not topic:
+            return
+        try:
+            import rospy
+            from Eyou_ROS1_Master.msg import JointRuntimeStateArray
+        except Exception as exc:
+            self.events.emit("joint_runtime", "joint runtime forwarder unavailable",
+                             level="warning", data={"error": str(exc)})
+            return
+
+        def callback(msg: Any) -> None:
+            states = []
+            for item in getattr(msg, "states", []):
+                states.append({
+                    "joint_name": str(getattr(item, "joint_name", "")),
+                    "backend": str(getattr(item, "backend", "")),
+                    "lifecycle_state": str(getattr(item, "lifecycle_state", "")),
+                    "online": bool(getattr(item, "online", False)),
+                    "enabled": bool(getattr(item, "enabled", False)),
+                    "fault": bool(getattr(item, "fault", False)),
+                })
+            self.broadcast({
+                "type": "joint_runtime_states",
+                "protocol_version": PROTOCOL_VERSION,
+                "seq": 0,
+                "timestamp_ms": now_ms(),
+                "states": states,
+            })
+
+        self.joint_runtime_subscriber = rospy.Subscriber(
+            topic, JointRuntimeStateArray, callback, queue_size=1
+        )
+        self.events.emit("joint_runtime", "joint runtime forwarder started", data={"topic": topic})
 
     def _video_monitor_loop(self) -> None:
         if not self.video_manager:
@@ -238,6 +278,17 @@ def parse_camera(value: str) -> Dict[str, Any]:
     }
 
 
+def parse_service_command(value: str) -> Tuple[str, str]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("service command must be command=/service/name")
+    command, service = value.split("=", 1)
+    command = command.strip()
+    service = service.strip()
+    if not command or not service:
+        raise argparse.ArgumentTypeError("service command and service name must be non-empty")
+    return command, service
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ROS1 host bridge TCP/JSON node")
     parser.add_argument("--host", default="127.0.0.1")
@@ -249,6 +300,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--servo-topic", default="/servo_server/delta_twist_cmds")
     parser.add_argument("--servo-frame", default="catch_camera")
     parser.add_argument("--gripper-position-topic", default="/arm_control/gripper_position")
+    parser.add_argument(
+        "--hybrid-service-ns",
+        default="/hybrid_motor_hw_node",
+        help="ROS service namespace for lifecycle and joint mode commands",
+    )
+    parser.add_argument(
+        "--service-command",
+        action="append",
+        type=parse_service_command,
+        default=[],
+        metavar="COMMAND=SERVICE",
+        help=(
+            "map a TCP command to a std_srvs/Trigger service; may be repeated. "
+            "SERVICE may use {command}, {mode}, {source}, e.g. "
+            "set_control_mode=/robot/set_{mode}_mode"
+        ),
+    )
     parser.add_argument("--gripper-min-position", type=float, default=0.0)
     parser.add_argument("--gripper-max-position", type=float, default=0.044)
     parser.add_argument("--gripper-initial-position", type=float, default=0.022)
@@ -276,22 +344,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="start enabled direct video sources when the bridge starts",
     )
     parser.add_argument("--video-poll-sec", type=float, default=1.0)
+    parser.add_argument(
+        "--joint-runtime-topic",
+        default="/hybrid_motor_hw_node/joint_runtime_states",
+        help="ROS topic to forward as TCP joint_runtime_states when --ros is used; empty disables it",
+    )
     return parser
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
     events = RingBufferEventSink()
+    service_commands = dict(args.service_command or [])
     if args.ros:
         output: OutputAdapter = RosOutput(
             "host_bridge_node",
             args.cmd_vel_topic,
             args.servo_topic,
             args.gripper_position_topic,
+            args.hybrid_service_ns,
+            service_commands,
             events,
         )
     else:
-        output = DryRunOutput(events)
+        output = DryRunOutput(events, service_commands)
 
     video_manager: Optional[VideoManager] = None
     if args.video_config:
@@ -324,6 +400,7 @@ def main() -> None:
         video_manager=video_manager,
         video_autostart=args.video_autostart,
         video_poll_sec=args.video_poll_sec,
+        joint_runtime_topic=args.joint_runtime_topic if args.ros else "",
         events=events,
     )
     if args.debug_ui:

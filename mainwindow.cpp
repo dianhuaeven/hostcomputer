@@ -2,6 +2,7 @@
 #include "./ui_mainwindow.h"
 #include "src/communication/HostProtocol.h"
 #include "src/communication/SharedStructs.h"
+#include "src/controller/MotorRuntimeCarouselWidget.h"
 #include <QtGlobal>
 #include <QSpinBox>
 
@@ -25,7 +26,6 @@
 #include <QSettings>
 #include <QNetworkInterface>
 #include <QFrame>
-#include <QGroupBox>
 #include <QTextEdit>
 #include <QThread>
 #include <QJsonArray>
@@ -81,6 +81,25 @@ QString modeNameForProtocol(ControlMode mode)
     return mode == ControlMode::Arm ? QStringLiteral("arm") : QStringLiteral("vehicle");
 }
 
+QString displayNameForControlMode(ControlMode mode)
+{
+    return mode == ControlMode::Arm ? QStringLiteral("机械臂操控") : QStringLiteral("车体运动");
+}
+
+bool parseControlMode(const QString &modeText, ControlMode *mode)
+{
+    const QString normalized = modeText.trimmed().toLower();
+    if (normalized == QStringLiteral("arm")) {
+        *mode = ControlMode::Arm;
+        return true;
+    }
+    if (normalized == QStringLiteral("vehicle") || normalized == QStringLiteral("base")) {
+        *mode = ControlMode::Vehicle;
+        return true;
+    }
+    return false;
+}
+
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent)
@@ -99,15 +118,7 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle("上位机v2");
     resize(1920, 1080);
     setMinimumSize(1600, 900);
-    ui->frame_status->hide();
-    ui->group_cameras->setTitle("视频与环境遥测");
-    ui->group_car_model->setTitle("姿态与控制");
-    ui->group_commands->setTitle("指令日志");
-    ui->group_errors->setTitle("错误日志");
-    ui->horizontalLayout_main->setStretch(0, 3);
-    ui->horizontalLayout_main->setStretch(1, 2);
-    ui->verticalLayout_right->setStretch(0, 2);
-    ui->verticalLayout_right->setStretch(1, 3);
+    m_statusErrorLabel = ui->label_status_error_count;
 
     // 初始化组件
     setupController();
@@ -165,6 +176,7 @@ void MainWindow::setupController()
 
     // 数据接收
     connect(m_controller, &Controller::motorStateReceived, this, &MainWindow::onMotorStateReceived);
+    connect(m_controller, &Controller::jointRuntimeStatesReceived, this, &MainWindow::onJointRuntimeStatesReceived);
     connect(m_controller, &Controller::co2DataReceived, this, &MainWindow::onCO2DataReceived);
     connect(m_controller, &Controller::imuDataReceived, this, &MainWindow::onIMUDataReceived);
     connect(m_controller, &Controller::cameraInfoReceived, this, &MainWindow::onCameraInfoReceived);
@@ -178,37 +190,73 @@ void MainWindow::setupController()
 
 void MainWindow::setupDisplayLayout()
 {
-    m_cameraGridWidget = new CameraGridWidget(this);
+    m_cameraGridWidget = ui->cameraGridWidget;
+    connect(m_cameraGridWidget, &CameraGridWidget::cameraListRefreshRequested,
+            this, [this]() {
+        if (m_controller && m_controller->requestCameraList()) {
+            addCommand("[视频] 已请求刷新视频源列表");
+        }
+    });
 
-    m_telemetryPanel = new TelemetryPanelWidget();
-    m_cameraGridWidget->setAuxiliaryWidget(m_telemetryPanel);
+    m_motorRuntimeWidget = ui->motorRuntimeWidget;
+    m_controlPanel = ui->controlPanelWidget;
+    m_robotAttitudeWidget = ui->robotAttitudeWidget;
+    m_logTabs = ui->logTabs;
+    ui->verticalLayout_left_workspace->setStretch(0, 1);
+    ui->verticalLayout_left_workspace->setStretch(1, 0);
+    ui->verticalLayout_right->setStretch(0, 1);
+    ui->verticalLayout_right->setStretch(1, 1);
+    ui->verticalLayout_right->setStretch(2, 2);
+    ui->verticalLayout_right->setStretch(3, 0);
 
-    m_controlPanel = new ControlPanelWidget();
-    m_controlPanel->setMaximumWidth(260);
+    auto connectLifecycleButton = [this](QPushButton *button, const QString &command) {
+        connect(button, &QPushButton::clicked, this, [this, command]() {
+            addCommand(QString("[生命周期] 请求 %1").arg(command));
+            if (m_controller && m_controller->isTcpConnected()) {
+                m_controller->sendSystemCommand(command);
+            } else {
+                addError(QString("[生命周期] TCP未连接，未发送 %1").arg(command));
+            }
+        });
+    };
+
+    connectLifecycleButton(ui->btn_lifecycle_init, QStringLiteral("init"));
+    connectLifecycleButton(ui->btn_lifecycle_enable, QStringLiteral("enable"));
+    connectLifecycleButton(ui->btn_lifecycle_disable, QStringLiteral("disable"));
+    connectLifecycleButton(ui->btn_lifecycle_halt, QStringLiteral("halt"));
+    connectLifecycleButton(ui->btn_lifecycle_resume, QStringLiteral("resume"));
+    connectLifecycleButton(ui->btn_lifecycle_recover, QStringLiteral("recover"));
+    connectLifecycleButton(ui->btn_lifecycle_shutdown, QStringLiteral("shutdown"));
+
+    auto connectControlModeButton = [this](QPushButton *button, ControlMode controlMode,
+                                           const QString &protocolMode,
+                                           const QString &label) {
+        connect(button, &QPushButton::clicked, this, [this, controlMode, protocolMode, label]() {
+            addCommand(QString("[控制域] 请求切换到 %1").arg(label));
+            if (m_controller && m_controller->isTcpConnected()) {
+                QJsonObject params;
+                params["mode"] = protocolMode;
+                if (m_controller->sendSystemCommand(QStringLiteral("set_control_mode"), params)) {
+                    applyControlMode(controlMode);
+                    sendOperatorInputSnapshot();
+                }
+            } else {
+                addError(QString("[控制域] TCP未连接，未发送 %1").arg(label));
+            }
+        });
+    };
+
+    connectControlModeButton(ui->btn_mode_vehicle, ControlMode::Vehicle,
+                             QStringLiteral("vehicle"), QStringLiteral("底盘"));
+    connectControlModeButton(ui->btn_mode_arm, ControlMode::Arm,
+                             QStringLiteral("arm"), QStringLiteral("机械臂"));
+
     connect(m_controlPanel, &ControlPanelWidget::gamepadConnectRequested,
             this, &MainWindow::on_btn_gamepad_connect_clicked);
     connect(m_controlPanel, &ControlPanelWidget::emergencyStopRequested,
             this, [this]() {
         triggerEmergencyStop(QStringLiteral("control_panel"));
     });
-    ui->horizontalLayout_model_gamepad->addWidget(m_controlPanel);
-
-    ui->group_cameras->layout()->addWidget(m_cameraGridWidget);
-
-    QVBoxLayout *carLayout = new QVBoxLayout(ui->CarWidget);
-    carLayout->setContentsMargins(0, 0, 0, 0);
-    m_robotAttitudeWidget = new RobotAttitudeWidget(ui->CarWidget);
-    carLayout->addWidget(m_robotAttitudeWidget);
-    ui->CarWidget->setLayout(carLayout);
-
-    auto *dataGroup = new QGroupBox("数据面板", this);
-    auto *dataLayout = new QVBoxLayout(dataGroup);
-    dataLayout->setContentsMargins(6, 6, 6, 6);
-    m_textData = new QTextEdit(dataGroup);
-    m_textData->setReadOnly(true);
-    m_textData->setPlaceholderText("等待下位机数据...");
-    dataLayout->addWidget(m_textData);
-    ui->horizontalLayout_logs->insertWidget(1, dataGroup);
 }
 
 void MainWindow::setupKeyboardController()
@@ -402,6 +450,9 @@ void MainWindow::addError(const QString& error)
     m_errorCount++;
     formatAndAddError(error);
     ui->label_error_count->setText(QString("错误: %1").arg(m_errorCount));
+    if (m_statusErrorLabel) {
+        m_statusErrorLabel->setText(QString("错误: %1").arg(m_errorCount));
+    }
     if (m_telemetryPanel) {
         m_telemetryPanel->setErrorCount(m_errorCount);
     }
@@ -541,15 +592,15 @@ void MainWindow::on_action_reset_layout_triggered()
     updateBandwidthAndPacketLoss();
 
     ui->label_fps_value->setText(QString::number(m_currentFPS) + " FPS");
-    ui->label_mode_value->setText(m_controlMode == ControlMode::Vehicle ? "车体运动" : "机械臂操控");
+    ui->label_mode_value->setText(displayNameForControlMode(m_controlMode));
     ui->label_error_count->setText(QString("错误: %1").arg(m_errorCount));
     if (m_telemetryPanel) {
         m_telemetryPanel->setFps(m_currentFPS);
-        m_telemetryPanel->setModeText(m_controlMode == ControlMode::Vehicle ? "车体运动" : "机械臂操控");
+        m_telemetryPanel->setModeText(displayNameForControlMode(m_controlMode));
         m_telemetryPanel->setErrorCount(m_errorCount);
     }
     if (m_controlPanel) {
-        m_controlPanel->setModeText(m_controlMode == ControlMode::Vehicle ? "车体运动" : "机械臂操控");
+        m_controlPanel->setModeText(displayNameForControlMode(m_controlMode));
     }
 
     update();
@@ -613,6 +664,9 @@ void MainWindow::on_btn_clear_errors_clicked()
     ui->text_errors->clear();
     m_errorCount = 0;
     ui->label_error_count->setText("错误: 0");
+    if (m_statusErrorLabel) {
+        m_statusErrorLabel->setText("错误: 0");
+    }
     if (m_telemetryPanel) {
         m_telemetryPanel->setErrorCount(0);
     }
@@ -821,6 +875,19 @@ void MainWindow::formatAndAddError(const QString& error)
 QString MainWindow::getCurrentTimestamp() const
 {
     return QDateTime::currentDateTime().toString("hh:mm:ss");
+}
+
+void MainWindow::applyControlMode(ControlMode mode)
+{
+    m_controlMode = mode;
+    const QString modeText = displayNameForControlMode(mode);
+    ui->label_mode_value->setText(modeText);
+    if (m_controlPanel) {
+        m_controlPanel->setModeText(modeText);
+    }
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setModeText(modeText);
+    }
 }
 
 void MainWindow::showTcpConnectionDialog()
@@ -1177,6 +1244,13 @@ void MainWindow::onMotorStateReceived(const Communication::MotorState &state)
     updateJointsData(state);
 }
 
+void MainWindow::onJointRuntimeStatesReceived(const Communication::JointRuntimeStateList &states)
+{
+    if (m_motorRuntimeWidget) {
+        m_motorRuntimeWidget->setRuntimeStates(states);
+    }
+}
+
 void MainWindow::onCO2DataReceived(float ppm)
 {
     if (m_telemetryPanel) {
@@ -1266,6 +1340,27 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
         return;
     }
 
+    if (type == "service_call_result") {
+        const bool ok = message["ok"].toBool(false);
+        const QString line = QString("[ROS service] %1 %2 seq=%3 code=%4 %5ms %6")
+                                 .arg(message["command"].toString("unknown"))
+                                 .arg(ok ? "OK" : "FAIL")
+                                 .arg(message["seq"].toVariant().toLongLong())
+                                 .arg(message["code"].toInt(-1))
+                                 .arg(message["duration_ms"].toVariant().toLongLong())
+                                 .arg(message["message"].toString());
+        const QString detail = QString("%1 service=%2 request=%3")
+                                   .arg(line)
+                                   .arg(message["service"].toString("unknown"))
+                                   .arg(message["request_type"].toString("unknown"));
+        if (ok) {
+            addCommand(detail);
+        } else {
+            addError(detail);
+        }
+        return;
+    }
+
     if (type == "emergency_state") {
         const bool active = message["active"].toBool(false);
         const QString source = message["source"].toString();
@@ -1305,6 +1400,10 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
         const QJsonObject emergency = message["emergency"].toObject();
         const QJsonObject motor = message["motor"].toObject();
         const QJsonObject lastError = message["last_error"].toObject();
+        ControlMode snapshotMode = m_controlMode;
+        if (parseControlMode(message["control_mode"].toString(), &snapshotMode)) {
+            applyControlMode(snapshotMode);
+        }
         addCommand(QString("[同步] system_snapshot seq=%1 mode=%2 emergency=%3 motor=%4/%5 last_error=%6:%7")
                    .arg(message["seq"].toVariant().toLongLong())
                    .arg(message["control_mode"].toString("unknown"))
@@ -1339,6 +1438,10 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
     }
 
     if (type == "system_status") {
+        ControlMode statusMode = m_controlMode;
+        if (parseControlMode(message["control_mode"].toString(), &statusMode)) {
+            applyControlMode(statusMode);
+        }
         if (message.contains("last_operator_input_seq")) {
             return;
         }

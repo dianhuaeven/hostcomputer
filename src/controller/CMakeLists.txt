@@ -28,6 +28,8 @@ set(CONTROLLER_SOURCES
     FfmpegRtspDecoder.h
     KeyboardController.cpp
     KeyboardController.h
+    MotorRuntimeCarouselWidget.cpp
+    MotorRuntimeCarouselWidget.h
     handlekey.cpp
     handlekey.h
     RtspPlayerWidget.cpp

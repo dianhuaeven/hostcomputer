@@ -1,4 +1,5 @@
 import threading
+import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from debug_events import EventSink, NullEventSink
@@ -10,6 +11,7 @@ from output_adapters import OutputAdapter
 class BridgeCore:
     MODE_VEHICLE = "vehicle"
     MODE_ARM = "arm"
+    LIFECYCLE_COMMANDS = {"init", "enable", "disable", "halt", "resume", "recover", "shutdown"}
     MODE_SWITCH_KEYS = {"1", "num_1"}
     EMERGENCY_KEYS = {"space"}
     SPEED_KEY_LEVELS = {
@@ -124,6 +126,9 @@ class BridgeCore:
                 "keyboard_base_arm_mapping",
                 "arm_servo_output",
                 "gripper_position_output",
+                "joint_runtime_states",
+                "hybrid_lifecycle_services",
+                "service_call_result",
             ],
             "max_frame_bytes": MAX_FRAME_BYTES,
             "watchdog_ms": self.watchdog_ms,
@@ -251,6 +256,45 @@ class BridgeCore:
             "message": message,
         }
 
+    def make_service_call_result(
+        self,
+        msg: Dict[str, Any],
+        *,
+        command: str,
+        service: str,
+        ok: bool,
+        code: int,
+        message: str,
+        duration_ms: int,
+    ) -> Dict[str, Any]:
+        return {
+            "type": "service_call_result",
+            "protocol_version": PROTOCOL_VERSION,
+            "seq": int(msg.get("seq", 0) or 0),
+            "timestamp_ms": now_ms(),
+            "request_type": str(msg.get("type", "unknown")),
+            "command": command,
+            "service": service,
+            "ok": ok,
+            "code": code,
+            "message": message,
+            "duration_ms": duration_ms,
+        }
+
+    def call_configured_service_result(
+        self,
+        msg: Dict[str, Any],
+        command: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Tuple[bool, int, str, str, int]]:
+        service = self.output.command_service_name(command, params)
+        if not service:
+            return None
+        started = time.monotonic()
+        ok, code, message = self.output.call_command_service(command, params)
+        duration_ms = int((time.monotonic() - started) * 1000)
+        return ok, code, message, service, duration_ms
+
     def publish_zero(self, source: str) -> None:
         self.publish_twist(TwistCommand(0.0, 0.0, source))
         self.publish_servo(ServoCommand(frame_id=self.servo_frame, source=source))
@@ -324,7 +368,8 @@ class BridgeCore:
             return
 
         if msg_type == "emergency_stop":
-            source = str(msg.get("params", {}).get("source", "unknown"))
+            params = msg.get("params", {}) or {}
+            source = str(params.get("source", "unknown"))
             with self.state_lock:
                 self.state.emergency_active = True
                 self.state.emergency_source = source
@@ -334,7 +379,21 @@ class BridgeCore:
                 "source": source,
             })
             self.publish_zero("emergency_stop")
-            yield self.make_ack(msg, True, 0, "emergency active")
+            service_result = self.call_configured_service_result(msg, "emergency_stop", params)
+            if service_result is None:
+                yield self.make_ack(msg, True, 0, "emergency active")
+            else:
+                ok, code, message, service, duration_ms = service_result
+                yield self.make_ack(msg, ok, code, message)
+                yield self.make_service_call_result(
+                    msg,
+                    command="emergency_stop",
+                    service=service,
+                    ok=ok,
+                    code=code,
+                    message=message,
+                    duration_ms=duration_ms,
+                )
             yield self.make_emergency_state("emergency active")
             return
 
@@ -357,9 +416,30 @@ class BridgeCore:
                 yield self.make_ack(msg, True, 0, "emergency cleared")
                 yield self.make_emergency_state("emergency cleared")
             elif command == "set_control_mode":
-                mode = self.normalize_mode(str(msg.get("params", {}).get("mode", "")))
+                params = msg.get("params", {}) or {}
+                mode = self.normalize_mode(str(params.get("mode", "")))
                 if not mode:
                     yield self.make_ack(msg, False, 2201, "invalid control mode")
+                    return
+                service_result = self.call_configured_service_result(msg, command, params)
+                if service_result is not None:
+                    ok, code, message, service, duration_ms = service_result
+                    if ok:
+                        with self.state_lock:
+                            self.state.control_mode = mode
+                            self.state.last_pressed_keys = []
+                        self.publish_zero("set_control_mode")
+                        self.events.emit("mode", "control mode set", data={"seq": seq, "mode": mode})
+                    yield self.make_ack(msg, ok, code, message)
+                    yield self.make_service_call_result(
+                        msg,
+                        command=command,
+                        service=service,
+                        ok=ok,
+                        code=code,
+                        message=message,
+                        duration_ms=duration_ms,
+                    )
                     return
                 with self.state_lock:
                     self.state.control_mode = mode
@@ -367,6 +447,30 @@ class BridgeCore:
                 self.publish_zero("set_control_mode")
                 self.events.emit("mode", "control mode set", data={"seq": seq, "mode": mode})
                 yield self.make_ack(msg, True, 0, f"control mode set to {mode}")
+            elif command in self.LIFECYCLE_COMMANDS:
+                service = self.output.lifecycle_service_name(command)
+                started = time.monotonic()
+                ok, code, message = self.output.call_lifecycle(command)
+                duration_ms = int((time.monotonic() - started) * 1000)
+                self.events.emit("lifecycle", "lifecycle command handled", data={
+                    "seq": seq,
+                    "command": command,
+                    "service": service,
+                    "ok": ok,
+                    "code": code,
+                    "message": message,
+                    "duration_ms": duration_ms,
+                }, level="info" if ok else "error")
+                yield self.make_ack(msg, ok, code, message)
+                yield self.make_service_call_result(
+                    msg,
+                    command=command,
+                    service=service,
+                    ok=ok,
+                    code=code,
+                    message=message,
+                    duration_ms=duration_ms,
+                )
             else:
                 yield self.make_ack(msg, True, 0, f"system command {command} accepted")
             return
