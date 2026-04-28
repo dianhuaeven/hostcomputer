@@ -92,6 +92,8 @@ def test_config_and_runner() -> None:
     assert started["camera_id"] == 0
     assert started["rtsp_url"] == "rtsp://192.168.1.50:8554/front_raw"
     assert started["rtsp_transport"] == "tcp"
+    assert "-pix_fmt yuv420p" in started["command"]
+    assert "-profile:v baseline" in started["command"]
     assert "-rtsp_transport tcp" in started["command"]
     assert "rtsp://127.0.0.1:8554/front_raw" in started["command"]
 

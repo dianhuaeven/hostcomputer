@@ -277,6 +277,10 @@ class VideoManager:
             return [
                 "-c:v",
                 "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-profile:v",
+                "baseline",
                 "-preset",
                 "ultrafast",
                 "-tune",
