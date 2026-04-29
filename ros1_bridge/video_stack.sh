@@ -201,6 +201,7 @@ start_stack() {
       --video-manager \
       --video-manager-host "$VIDEO_MANAGER_HOST" \
       --video-manager-port "$VIDEO_MANAGER_PORT" \
+      --video-manager-timeout "${VIDEO_MANAGER_TIMEOUT:-5.0}" \
       --debug-ui \
       --debug-host "$DEBUG_HOST" \
       --debug-port "$DEBUG_PORT"
@@ -239,7 +240,7 @@ from video_manager_ipc import VideoManagerClient, VideoManagerClientError
 host = sys.argv[1]
 port = int(sys.argv[2])
 try:
-    diag = VideoManagerClient(host, port, timeout=1.0).diagnostics()
+    diag = VideoManagerClient(host, port, timeout=10.0).diagnostics()
 except VideoManagerClientError as exc:
     print(f"video manager unavailable: {exc}")
     sys.exit(0)

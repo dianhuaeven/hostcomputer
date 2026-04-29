@@ -94,8 +94,7 @@ class VideoManagerNode:
         self.stop_event.set()
 
     def _autostart_streams(self) -> None:
-        with self._manager_lock:
-            started = self.manager.start_enabled()
+        started = self.manager.start_enabled()
         print(f"[video-manager] autostarted {len(started)} stream(s)", flush=True)
 
     def _monitor_loop(self) -> None:
