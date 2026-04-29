@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import socket
 import threading
 from typing import Any, Dict, List, Optional, Tuple
@@ -11,6 +12,8 @@ from bridge_protocol import json_line
 from debug_ui import DebugHttpServer
 from debug_events import EventSink, RingBufferEventSink
 from output_adapters import DryRunOutput, OutputAdapter, RosOutput
+
+DEFAULT_CAMERA_CONFIG = os.path.join(os.path.dirname(__file__), "video_sources.local.yaml")
 
 
 class HostBridgeServer:
@@ -175,13 +178,73 @@ def parse_camera(value: str) -> Dict[str, Any]:
     }
 
 
+def load_cameras_from_yaml(path: str, publish_host_override: str = "") -> List[Dict[str, Any]]:
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError("PyYAML is required for --camera-config") from exc
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    rtsp = data.get("rtsp", {}) if isinstance(data.get("rtsp", {}), dict) else {}
+    publish_host = publish_host_override or rtsp.get("publish_host") or rtsp.get("host") or "127.0.0.1"
+    port = int(rtsp.get("port", 8554))
+
+    sources = data.get("direct_sources", [])
+    if not isinstance(sources, list):
+        raise ValueError("camera config field direct_sources must be a list")
+
+    cameras: List[Dict[str, Any]] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        if not bool(source.get("enabled", True)):
+            continue
+
+        rtsp_path = str(source.get("rtsp_path") or source.get("source_id") or "").strip("/")
+        if not rtsp_path:
+            raise ValueError("enabled camera source is missing rtsp_path/source_id")
+
+        camera_id = int(source.get("camera_id", len(cameras)))
+        name = str(source.get("name") or source.get("source_id") or rtsp_path)
+        codec = str(source.get("codec", "h264"))
+        width = int(source.get("width", 1280))
+        height = int(source.get("height", 720))
+        fps = int(source.get("fps", 25))
+        bitrate_kbps = int(source.get("bitrate_kbps", 0))
+
+        cameras.append({
+            "camera_id": camera_id,
+            "name": name,
+            "online": True,
+            "rtsp_url": f"rtsp://{publish_host}:{port}/{rtsp_path}",
+            "codec": codec,
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "bitrate_kbps": bitrate_kbps,
+        })
+
+    return cameras
+
+
+def detect_publish_host() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ROS1 host bridge TCP/JSON node")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=9090)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="run without ROS and print bridge outputs")
-    mode.add_argument("--ros", action="store_true", help="publish ROS control topics with rospy")
+    mode.add_argument("--ros", action="store_true", help="publish ROS control topics with rospy; default mode")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel")
     parser.add_argument("--servo-topic", default="/servo_server/delta_twist_cmds")
     parser.add_argument("--servo-frame", default="catch_camera")
@@ -192,9 +255,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--watchdog-ms", type=int, default=DEFAULT_WATCHDOG_MS)
     parser.add_argument("--linear-speed", type=float, default=0.8, help="vehicle level-5 linear speed")
     parser.add_argument("--angular-speed", type=float, default=1.5, help="vehicle level-5 angular speed")
-    parser.add_argument("--debug-ui", action="store_true", help="start read-only debug HTTP UI")
-    parser.add_argument("--debug-host", default="127.0.0.1")
+    parser.add_argument("--debug-ui", dest="debug_ui", action="store_true", default=True,
+                        help="start read-only debug HTTP UI; enabled by default")
+    parser.add_argument("--no-debug-ui", dest="debug_ui", action="store_false",
+                        help="disable debug HTTP UI")
+    parser.add_argument("--debug-host", default="0.0.0.0")
     parser.add_argument("--debug-port", type=int, default=18080)
+    parser.add_argument(
+        "--camera-config",
+        default=DEFAULT_CAMERA_CONFIG,
+        help="load camera list from a video_sources YAML file",
+    )
+    parser.add_argument(
+        "--camera-publish-host",
+        default="",
+        help="override rtsp.publish_host when loading --camera-config",
+    )
     parser.add_argument(
         "--camera",
         action="append",
@@ -207,7 +283,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_arg_parser().parse_args()
     events = RingBufferEventSink()
-    if args.ros:
+    cameras = args.camera
+    if args.camera_config:
+        camera_config = os.path.expanduser(args.camera_config)
+        camera_publish_host = args.camera_publish_host or detect_publish_host()
+        cameras = load_cameras_from_yaml(camera_config, camera_publish_host)
+        if args.camera:
+            cameras.extend(args.camera)
+
+    if not args.dry_run:
         output: OutputAdapter = RosOutput(
             "host_bridge_node",
             args.cmd_vel_topic,
@@ -229,7 +313,7 @@ def main() -> None:
         gripper_min_position=args.gripper_min_position,
         gripper_max_position=args.gripper_max_position,
         gripper_initial_position=args.gripper_initial_position,
-        cameras=args.camera,
+        cameras=cameras,
         events=events,
     )
     if args.debug_ui:
