@@ -18,6 +18,13 @@ BRIDGE_MODE="${BRIDGE_MODE:---ros}"
 port_listening() {
   local host="$1"
   local port="$2"
+  if command -v ss >/dev/null 2>&1; then
+    ss -lnt | awk -v port=":${port}" '
+      NR > 1 && substr($4, length($4) - length(port) + 1) == port { found = 1 }
+      END { exit found ? 0 : 1 }
+    '
+    return
+  fi
   python3 - "$host" "$port" <<'PY'
 import socket
 import sys
