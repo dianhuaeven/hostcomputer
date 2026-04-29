@@ -4,7 +4,7 @@
 传输方式：TCP 长连接，每条 JSON 消息以 `\n` 结尾
 数据编码：UTF-8
 
-> 当前上位机发送协议以 `docs/通信与视频链路改造计划.md` 中的协议 v1 为准。旧版 `cmd_vel` JSON 帧已经废弃；上位机只发送 `operator_input` 输入快照，下位机 bridge 自行解析并发布 ROS `/cmd_vel` 或其他内部控制指令。
+> 当前上位机发送协议以 `docs/开发归档/通信与视频链路改造计划.md` 中的协议 v1 为准。旧版 `cmd_vel` JSON 帧已经废弃；上位机只发送 `operator_input` 输入快照，下位机 bridge 自行解析并发布 ROS `/cmd_vel` 或其他内部控制指令。
 
 ## 通用帧约束
 

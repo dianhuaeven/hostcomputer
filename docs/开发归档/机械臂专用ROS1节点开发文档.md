@@ -499,7 +499,7 @@ rostopic echo /arm_bridge/connection_alive
 更通用的整体对接文档可参考：
 
 - [下位机ROS节点对接文档.md](/C:/Users/Lenovo/Documents/hostcomputer/下位机ROS节点对接文档.md)
-- [TCP_JSON协议文档.md](/C:/Users/Lenovo/Documents/hostcomputer/TCP_JSON协议文档.md)
-- [手柄键盘控制说明.md](/C:/Users/Lenovo/Documents/hostcomputer/docs/手柄键盘控制说明.md)
+- [TCP_JSON协议文档.md](../../TCP_JSON协议文档.md)
+- [手柄键盘控制说明.md](../手柄键盘控制说明.md)
 
 如果你后面确认要把底盘、摄像头、环境数据一起打通，再回到通用文档扩展即可。
