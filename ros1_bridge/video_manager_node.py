@@ -27,6 +27,10 @@ class VideoManagerNode:
         rtsp_public_host: str = "",
         rtsp_publish_host: str = "",
         rtsp_port: int = 0,
+        log_dir: str = "/tmp/rtsp_logs",
+        startup_check_sec: float = 1.5,
+        device_timeout_sec: float = 5.0,
+        restart_backoff_sec: float = 5.0,
     ) -> None:
         self.config_path = config_path
         self.host = host
@@ -37,6 +41,10 @@ class VideoManagerNode:
         self.rtsp_public_host = rtsp_public_host
         self.rtsp_publish_host = rtsp_publish_host
         self.rtsp_port = rtsp_port
+        self.log_dir = log_dir
+        self.startup_check_sec = startup_check_sec
+        self.device_timeout_sec = device_timeout_sec
+        self.restart_backoff_sec = restart_backoff_sec
         self.stop_event = threading.Event()
         self._manager_lock = threading.RLock()
         self.manager = self._load_manager(self.config_path)
@@ -49,7 +57,14 @@ class VideoManagerNode:
             config.rtsp.publish_host = self.rtsp_publish_host
         if self.rtsp_port:
             config.rtsp.port = self.rtsp_port
-        return VideoManager(config, dry_run=self.dry_run)
+        return VideoManager(
+            config,
+            dry_run=self.dry_run,
+            log_dir=self.log_dir,
+            startup_check_sec=self.startup_check_sec,
+            device_timeout_sec=self.device_timeout_sec,
+            restart_backoff_sec=self.restart_backoff_sec,
+        )
 
     def serve_forever(self) -> None:
         if self.autostart:
@@ -140,6 +155,8 @@ class VideoManagerNode:
                 response["type"] = "camera_list"
                 response["cameras"] = cameras
                 return response
+            if msg_type == "diagnostics":
+                return self._handle_diagnostics(request)
             if msg_type == "stream_request":
                 return self._handle_stream_request(request)
             if msg_type == "reload_config":
@@ -173,9 +190,39 @@ class VideoManagerNode:
                 camera = self.manager.restart(camera_id)
             else:
                 return _error_response(request, 2402, f"unsupported stream action: {action}")
-        response = _ok_response(seq, f"camera stream {action} accepted")
+        ok = action == "stop" or bool(camera.get("online", False))
+        message = f"camera stream {action} accepted" if ok else str(camera.get("last_error", "stream failed"))
+        response = _ok_response(seq, message) if ok else _error_response(request, 2501, message)
         response["type"] = "stream_response"
         response["camera"] = camera
+        return response
+
+    def _handle_diagnostics(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        seq = int(request.get("seq", 0) or 0)
+        with self._manager_lock:
+            self.manager.refresh()
+            cameras = self.manager.camera_infos()
+            config = self.manager.config
+        response = _ok_response(seq, "ok")
+        response["type"] = "diagnostics"
+        response["config_path"] = self.config_path
+        response["dry_run"] = self.dry_run
+        response["autostart"] = self.autostart
+        response["log_dir"] = self.log_dir
+        response["rtsp"] = {
+            "public_host": config.rtsp.host,
+            "publish_host": config.rtsp.publish_host,
+            "port": config.rtsp.port,
+            "transport": config.rtsp.transport,
+        }
+        response["mediamtx_listening"] = _port_listening(config.rtsp.port)
+        response["cameras"] = cameras
+        response["summary"] = {
+            "total": len(cameras),
+            "online": sum(1 for camera in cameras if camera.get("online")),
+            "desired_online": sum(1 for camera in cameras if camera.get("desired_online")),
+            "errors": sum(1 for camera in cameras if camera.get("last_error")),
+        }
         return response
 
     def _handle_reload_config(self, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -223,6 +270,14 @@ def _send_json(conn: socket.socket, payload: Dict[str, Any]) -> None:
     conn.sendall(line.encode("utf-8"))
 
 
+def _port_listening(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            return True
+    except OSError:
+        return False
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Direct RTSP video lifecycle manager")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
@@ -234,6 +289,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rtsp-public-host", default="")
     parser.add_argument("--rtsp-publish-host", default="")
     parser.add_argument("--rtsp-port", type=int, default=0)
+    parser.add_argument("--log-dir", default="/tmp/rtsp_logs")
+    parser.add_argument("--startup-check-sec", type=float, default=1.5)
+    parser.add_argument("--device-timeout-sec", type=float, default=5.0)
+    parser.add_argument("--restart-backoff-sec", type=float, default=5.0)
     return parser
 
 
@@ -250,6 +309,10 @@ def main() -> int:
             rtsp_public_host=args.rtsp_public_host,
             rtsp_publish_host=args.rtsp_publish_host,
             rtsp_port=args.rtsp_port,
+            log_dir=args.log_dir,
+            startup_check_sec=args.startup_check_sec,
+            device_timeout_sec=args.device_timeout_sec,
+            restart_backoff_sec=args.restart_backoff_sec,
         )
     except VideoConfigError as exc:
         print(f"[video-manager] failed to load config: {exc}", flush=True)
