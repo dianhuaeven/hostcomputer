@@ -394,6 +394,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="load camera list from a video_sources YAML file",
     )
     parser.add_argument(
+        "--no-camera-config",
+        action="store_true",
+        help="disable static camera config loading; useful when --video-manager owns cameras",
+    )
+    parser.add_argument(
         "--camera-publish-host",
         default="",
         help="override rtsp.publish_host when loading --camera-config",
@@ -442,7 +447,9 @@ def main() -> None:
     service_commands = dict(args.service_command or [])
     
     cameras = args.camera
-    if args.camera_config:
+    if args.no_camera_config:
+        cameras = cameras or []
+    elif args.camera_config:
         camera_config = os.path.expanduser(args.camera_config)
         camera_publish_host = args.camera_publish_host or detect_publish_host()
         cameras = load_cameras_from_yaml(camera_config, camera_publish_host)

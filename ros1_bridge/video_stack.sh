@@ -204,7 +204,7 @@ start_stack() {
       "$BRIDGE_MODE" \
       --host "$BRIDGE_HOST" \
       --port "$BRIDGE_PORT" \
-      --camera-config "" \
+      --no-camera-config \
       --video-manager \
       --video-manager-host "$VIDEO_MANAGER_HOST" \
       --video-manager-port "$VIDEO_MANAGER_PORT" \
