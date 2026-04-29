@@ -7,8 +7,8 @@ After=network-online.target mediamtx.service
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=-/etc/default/robot-video-stack
-ExecStart=/bin/bash -lc '${HOSTCOMPUTER_DIR:-/home/rera/hostcomputer}/ros1_bridge/start_video_stack.sh'
-ExecStop=/bin/bash -lc '${HOSTCOMPUTER_DIR:-/home/rera/hostcomputer}/ros1_bridge/stop_video_stack.sh'
+ExecStart=/bin/bash -lc '${HOSTCOMPUTER_DIR:-/home/rera/hostcomputer}/ros1_bridge/video_stack.sh start'
+ExecStop=/bin/bash -lc '${HOSTCOMPUTER_DIR:-/home/rera/hostcomputer}/ros1_bridge/video_stack.sh stop'
 TimeoutStartSec=30
 TimeoutStopSec=15
 
