@@ -42,6 +42,14 @@ class VideoManagerClient:
             raise VideoManagerClientError("video manager returned invalid cameras field")
         return [camera for camera in cameras if isinstance(camera, dict)]
 
+    def diagnostics(self) -> Dict[str, Any]:
+        response = self.request({"type": "diagnostics"})
+        if not bool(response.get("ok", False)):
+            raise VideoManagerClientError(
+                str(response.get("message", "video manager diagnostics failed"))
+            )
+        return response
+
     def stream_request(self, camera_id: int, action: str) -> Dict[str, Any]:
         return self.request({
             "type": "stream_request",

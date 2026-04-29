@@ -1,8 +1,12 @@
 import os
+import shutil
 import shlex
+import socket
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from bridge_protocol import now_ms
@@ -16,6 +20,12 @@ except ImportError:  # pragma: no cover - exercised only on minimal systems
 
 class VideoConfigError(ValueError):
     pass
+
+
+DEFAULT_LOG_DIR = "/tmp/rtsp_logs"
+DEFAULT_STARTUP_CHECK_SECONDS = 1.5
+DEFAULT_DEVICE_TIMEOUT_SECONDS = 5.0
+DEFAULT_RESTART_BACKOFF_SECONDS = 5.0
 
 
 @dataclass
@@ -127,6 +137,8 @@ class DirectSourceRuntime:
     restart_count: int = 0
     last_exit_code: Optional[int] = None
     command: List[str] = field(default_factory=list)
+    log_path: str = ""
+    next_restart_at_ms: int = 0
 
     def camera_info(self, rtsp: RtspConfig) -> Dict[str, Any]:
         info = self.source.camera_info(rtsp, online=self.online, last_error=self.last_error)
@@ -137,6 +149,8 @@ class DirectSourceRuntime:
         info["last_exit_code"] = self.last_exit_code
         info["desired_online"] = self.desired_online
         info["command"] = " ".join(shlex.quote(part) for part in self.command)
+        info["log_path"] = self.log_path
+        info["next_restart_at_ms"] = self.next_restart_at_ms
         return info
 
 
@@ -146,10 +160,18 @@ class VideoManager:
         config: VideoConfig,
         dry_run: bool = False,
         events: Optional[EventSink] = None,
+        log_dir: str = DEFAULT_LOG_DIR,
+        startup_check_sec: float = DEFAULT_STARTUP_CHECK_SECONDS,
+        device_timeout_sec: float = DEFAULT_DEVICE_TIMEOUT_SECONDS,
+        restart_backoff_sec: float = DEFAULT_RESTART_BACKOFF_SECONDS,
     ) -> None:
         self.config = config
         self.dry_run = dry_run
         self.events = events or NullEventSink()
+        self.log_dir = Path(log_dir)
+        self.startup_check_sec = max(0.0, startup_check_sec)
+        self.device_timeout_sec = max(0.0, device_timeout_sec)
+        self.restart_backoff_sec = max(0.0, restart_backoff_sec)
         self._lock = threading.RLock()
         self._runtime: Dict[int, DirectSourceRuntime] = {
             source.camera_id: DirectSourceRuntime(source=source)
@@ -162,8 +184,20 @@ class VideoManager:
         path: str,
         dry_run: bool = False,
         events: Optional[EventSink] = None,
+        log_dir: str = DEFAULT_LOG_DIR,
+        startup_check_sec: float = DEFAULT_STARTUP_CHECK_SECONDS,
+        device_timeout_sec: float = DEFAULT_DEVICE_TIMEOUT_SECONDS,
+        restart_backoff_sec: float = DEFAULT_RESTART_BACKOFF_SECONDS,
     ) -> "VideoManager":
-        return cls(load_video_config(path), dry_run=dry_run, events=events)
+        return cls(
+            load_video_config(path),
+            dry_run=dry_run,
+            events=events,
+            log_dir=log_dir,
+            startup_check_sec=startup_check_sec,
+            device_timeout_sec=device_timeout_sec,
+            restart_backoff_sec=restart_backoff_sec,
+        )
 
     def start_enabled(self) -> List[Dict[str, Any]]:
         changed: List[Dict[str, Any]] = []
@@ -196,28 +230,64 @@ class VideoManager:
             if self.dry_run:
                 runtime.online = True
                 runtime.process = None
+                runtime.next_restart_at_ms = 0
                 self.events.emit("video", "dry-run stream started", data={
                     "camera_id": camera_id,
                     "command": runtime.camera_info(self.config.rtsp)["command"],
                 })
                 return runtime.camera_info(self.config.rtsp)
 
-            try:
-                runtime.process = subprocess.Popen(
-                    command,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+            if not is_rtsp_listening(self.config.rtsp.port):
+                self._mark_start_failed(
+                    runtime,
+                    f"MediaMTX is not listening on port {self.config.rtsp.port}",
                 )
+                return runtime.camera_info(self.config.rtsp)
+
+            device = runtime.source.device
+            if not os.path.exists(device):
+                self._mark_start_failed(runtime, f"missing device: {device}")
+                return runtime.camera_info(self.config.rtsp)
+
+            if not wait_for_device(device, self.device_timeout_sec):
+                self._mark_start_failed(runtime, f"device busy: {device}")
+                return runtime.camera_info(self.config.rtsp)
+
+            try:
+                self.log_dir.mkdir(parents=True, exist_ok=True)
+                runtime.log_path = str(self.log_dir / f"{runtime.source.rtsp_path}.log")
+                with open(runtime.log_path, "w", encoding="utf-8") as log:
+                    runtime.process = subprocess.Popen(
+                        command,
+                        stdin=subprocess.DEVNULL,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
                 runtime.online = True
+                runtime.next_restart_at_ms = 0
                 self.events.emit("video", "stream process started", data={
                     "camera_id": camera_id,
                     "pid": runtime.process.pid,
+                    "log_path": runtime.log_path,
                 })
+                if self.startup_check_sec > 0:
+                    time.sleep(self.startup_check_sec)
+                    exit_code = runtime.process.poll()
+                    if exit_code is not None:
+                        runtime.online = False
+                        runtime.last_exit_code = exit_code
+                        runtime.process = None
+                        runtime.stopped_at_ms = now_ms()
+                        runtime.last_error = self._startup_exit_error(runtime, exit_code)
+                        runtime.next_restart_at_ms = self._next_restart_ms()
+                        self.events.emit("video", "stream exited during startup", level="error", data={
+                            "camera_id": camera_id,
+                            "exit_code": exit_code,
+                            "log_path": runtime.log_path,
+                        })
             except OSError as exc:
-                runtime.online = False
-                runtime.process = None
-                runtime.last_error = str(exc)
-                runtime.stopped_at_ms = now_ms()
+                self._mark_start_failed(runtime, str(exc))
                 self.events.emit("video", "stream process failed to start", level="error", data={
                     "camera_id": camera_id,
                     "error": str(exc),
@@ -240,6 +310,7 @@ class VideoManager:
             runtime.process = None
             runtime.online = False
             runtime.stopped_at_ms = now_ms()
+            runtime.next_restart_at_ms = 0
             runtime.last_exit_code = process.returncode if process else runtime.last_exit_code
             self.events.emit("video", "stream stopped", data={"camera_id": camera_id})
             return runtime.camera_info(self.config.rtsp)
@@ -265,6 +336,10 @@ class VideoManager:
                 before = runtime.online
                 self._refresh_runtime_locked(runtime)
                 if auto_restart and runtime.desired_online and not runtime.online:
+                    if runtime.next_restart_at_ms and now_ms() < runtime.next_restart_at_ms:
+                        if runtime.online != before:
+                            changed.append(runtime.camera_info(self.config.rtsp))
+                        continue
                     runtime.restart_count += 1
                     self.events.emit("video", "stream auto-restarting", data={
                         "camera_id": runtime.source.camera_id,
@@ -365,10 +440,29 @@ class VideoManager:
         runtime.process = None
         runtime.stopped_at_ms = now_ms()
         runtime.last_error = f"ffmpeg exited with code {exit_code}"
+        runtime.next_restart_at_ms = self._next_restart_ms()
         self.events.emit("video", "stream process exited", level="warning", data={
             "camera_id": runtime.source.camera_id,
             "exit_code": exit_code,
         })
+
+    def _mark_start_failed(self, runtime: DirectSourceRuntime, message: str) -> None:
+        runtime.online = False
+        runtime.process = None
+        runtime.stopped_at_ms = now_ms()
+        runtime.last_error = message
+        runtime.next_restart_at_ms = self._next_restart_ms()
+
+    def _startup_exit_error(self, runtime: DirectSourceRuntime, exit_code: int) -> str:
+        tail = log_tail(Path(runtime.log_path)) if runtime.log_path else ""
+        if not tail:
+            return f"ffmpeg exited during startup with code {exit_code}"
+        return f"ffmpeg exited during startup with code {exit_code}: {tail}"
+
+    def _next_restart_ms(self) -> int:
+        if self.restart_backoff_sec <= 0:
+            return 0
+        return now_ms() + int(self.restart_backoff_sec * 1000)
 
     def _get_runtime(self, camera_id: int) -> DirectSourceRuntime:
         if camera_id not in self._runtime:
@@ -389,6 +483,54 @@ def load_video_config(path: str) -> VideoConfig:
     if not isinstance(data, dict):
         raise VideoConfigError("video config root must be a mapping")
     return parse_video_config(data)
+
+
+def is_rtsp_listening(port: int) -> bool:
+    if not shutil.which("ss"):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return True
+        except OSError:
+            return False
+    result = subprocess.run(
+        ["ss", "-lnt"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return f":{port} " in result.stdout
+
+
+def log_tail(log_path: Path, max_bytes: int = 4096) -> str:
+    if not log_path.exists():
+        return ""
+    with open(log_path, "rb") as handle:
+        try:
+            handle.seek(-max_bytes, os.SEEK_END)
+        except OSError:
+            handle.seek(0)
+        return handle.read().decode("utf-8", errors="replace").replace("\r", "\n").strip()
+
+
+def is_device_busy(device: str) -> bool:
+    if not shutil.which("fuser"):
+        return False
+    return subprocess.run(
+        ["fuser", "-s", device],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
+
+
+def wait_for_device(device: str, timeout: float) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not is_device_busy(device):
+            return True
+        time.sleep(0.2)
+    return not is_device_busy(device)
 
 
 def parse_video_config(data: Dict[str, Any]) -> VideoConfig:

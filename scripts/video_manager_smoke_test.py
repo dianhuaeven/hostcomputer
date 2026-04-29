@@ -19,6 +19,7 @@ MANAGER_PORT = int(os.getenv("VIDEO_MANAGER_NODE_TEST_PORT", "19195"))
 
 sys.path.insert(0, os.path.join(ROOT, "ros1_bridge"))
 from video_manager import VideoManager, crop_filter_for_aspect, load_video_config  # noqa: E402
+from video_manager_ipc import VideoManagerClient  # noqa: E402
 
 
 class JsonLineClient:
@@ -146,6 +147,10 @@ def test_bridge_video_requests() -> None:
         stderr=subprocess.DEVNULL,
     )
     wait_for_port(MANAGER_PORT, "video manager")
+    diagnostics = VideoManagerClient(HOST, MANAGER_PORT).diagnostics()
+    assert diagnostics["summary"]["total"] == 1
+    assert diagnostics["summary"]["online"] == 0
+    assert diagnostics["rtsp"]["public_host"] == "192.168.1.50"
 
     bridge_proc = subprocess.Popen(
         [
@@ -204,6 +209,8 @@ def test_bridge_video_requests() -> None:
             assert camera_info["camera_id"] == 0
             assert camera_info["online"] is True
             assert camera_info["rtsp_url"] == "rtsp://192.168.1.50:8554/front_raw"
+            diagnostics = VideoManagerClient(HOST, MANAGER_PORT).diagnostics()
+            assert diagnostics["summary"]["online"] == 1
 
             client.send({
                 "type": "camera_stream_request",
