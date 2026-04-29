@@ -292,7 +292,13 @@ def load_cameras_from_yaml(path: str, publish_host_override: str = "") -> List[D
         data = yaml.safe_load(f) or {}
 
     rtsp = data.get("rtsp", {}) if isinstance(data.get("rtsp", {}), dict) else {}
-    publish_host = publish_host_override or rtsp.get("publish_host") or rtsp.get("host") or "127.0.0.1"
+    publish_host = (
+        publish_host_override
+        or rtsp.get("public_host")
+        or rtsp.get("host")
+        or rtsp.get("publish_host")
+        or "127.0.0.1"
+    )
     port = int(rtsp.get("port", 8554))
 
     sources = data.get("direct_sources", [])
