@@ -363,6 +363,40 @@ def main() -> None:
             assert mode_service["ok"] is True
 
             client.send({
+                "type": "system_command",
+                "protocol_version": 1,
+                "seq": 115,
+                "timestamp_ms": now_ms(),
+                "command": "request_arm_named_targets",
+                "params": {},
+            })
+            targets_ack = client.recv_until("ack")
+            assert targets_ack["seq"] == 115
+            assert targets_ack["ack_type"] == "system_command"
+            assert targets_ack["ok"] is True
+            targets = client.recv_until("arm_named_targets")
+            assert targets["seq"] == 115
+            assert [item["name"] for item in targets["targets"]][:2] == ["home", "ready"]
+
+            client.send({
+                "type": "system_command",
+                "protocol_version": 1,
+                "seq": 116,
+                "timestamp_ms": now_ms(),
+                "command": "move_arm_named_target",
+                "params": {"target": "home"},
+            })
+            move_ack = client.recv_until("ack")
+            assert move_ack["seq"] == 116
+            assert move_ack["ack_type"] == "system_command"
+            assert move_ack["ok"] is True
+            move_result = client.recv_until("service_call_result")
+            assert move_result["seq"] == 116
+            assert move_result["command"] == "move_arm_named_target"
+            assert move_result["service"] == "moveit:arm/home"
+            assert move_result["ok"] is True
+
+            client.send({
                 "type": "emergency_stop",
                 "protocol_version": 1,
                 "seq": 15,

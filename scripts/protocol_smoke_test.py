@@ -149,6 +149,7 @@ def run_ok_case():
             cameras = client.recv_until("camera_list_response")
             assert cameras["seq"] == 4
             assert len(cameras["cameras"]) >= 1
+            assert any(camera["camera_id"] == 5 for camera in cameras["cameras"])
 
             client.send({
                 "type": "emergency_stop",

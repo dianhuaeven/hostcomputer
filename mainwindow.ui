@@ -54,7 +54,7 @@ QPushButton { min-height: 26px; padding: 2px 10px; }</string>
       </property>
       <layout class="QHBoxLayout" name="horizontalLayout_status">
        <property name="spacing">
-        <number>15</number>
+        <number>10</number>
        </property>
        <item>
         <widget class="QLabel" name="label_connection_status">
@@ -167,46 +167,6 @@ QPushButton { min-height: 26px; padding: 2px 10px; }</string>
         </widget>
        </item>
        <item>
-        <widget class="Line" name="line_separator5">
-         <property name="orientation">
-          <enum>Qt::Orientation::Vertical</enum>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QLabel" name="label_gamepad">
-         <property name="text">
-          <string>手柄:</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QLabel" name="label_gamepad_value">
-         <property name="styleSheet">
-          <string>color: red; font-weight: bold;</string>
-         </property>
-         <property name="text">
-          <string>未连接</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_gamepad_connect">
-         <property name="maximumSize">
-          <size>
-           <width>80</width>
-           <height>30</height>
-          </size>
-         </property>
-         <property name="styleSheet">
-          <string>QPushButton { padding: 2px 8px; }</string>
-         </property>
-         <property name="text">
-          <string>连接手柄</string>
-         </property>
-        </widget>
-       </item>
-       <item>
         <widget class="QLabel" name="label_status_error_count">
          <property name="styleSheet">
           <string>color: #b91c1c; font-weight: 700;</string>
@@ -227,7 +187,41 @@ QPushButton { min-height: 26px; padding: 2px 10px; }</string>
            <height>20</height>
           </size>
          </property>
-        </spacer>
+       </spacer>
+      </item>
+       <item>
+        <widget class="QPushButton" name="btn_clear_emergency">
+         <property name="minimumSize">
+          <size>
+           <width>96</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>96</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="styleSheet">
+          <string>QPushButton {
+    background-color: #f8fafc;
+    color: #166534;
+    border: 1px solid #22c55e;
+    border-radius: 6px;
+    font-weight: 700;
+}
+QPushButton:hover {
+    background-color: #dcfce7;
+}
+QPushButton:pressed {
+    background-color: #bbf7d0;
+}</string>
+         </property>
+         <property name="text">
+          <string>解除急停</string>
+         </property>
+        </widget>
        </item>
        <item>
         <widget class="QPushButton" name="btn_emergency_stop">

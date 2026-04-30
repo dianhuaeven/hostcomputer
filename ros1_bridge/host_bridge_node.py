@@ -452,6 +452,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--servo-topic", default="/servo_server/delta_twist_cmds")
     parser.add_argument("--servo-frame", default="catch_camera")
     parser.add_argument("--gripper-position-topic", default="/arm_control/gripper_position")
+    parser.add_argument(
+        "--moveit-group",
+        default="manipulator",
+        help="MoveIt MoveGroup name used for named arm targets",
+    )
     parser.add_argument("--flipper-jog-topic", default="/flipper_control/jog_cmd")
     parser.add_argument("--flipper-profile-service", default="/flipper_control/set_control_profile")
     parser.add_argument(
@@ -597,6 +602,7 @@ def main() -> None:
             args.flipper_profile_service,
             args.hybrid_service_ns,
             service_commands,
+            args.moveit_group,
             events,
         )
     else:

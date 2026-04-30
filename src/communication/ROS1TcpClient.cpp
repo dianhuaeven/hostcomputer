@@ -1115,7 +1115,11 @@ void ROS1TcpClient::processReceivedData()
         } else if (msgType == "system_snapshot" || msgType == "param_response"
                    || msgType == "emergency_state" || msgType == "protocol_error"
                    || msgType == "service_call_result"
-                   || msgType == "hello" || msgType == "capabilities") {
+                   || msgType == "hello" || msgType == "capabilities"
+                   || msgType == "arm_named_targets"
+                   || msgType == "moveit_named_targets"
+                   || msgType == "moveit_named_poses"
+                   || msgType == "arm_action_list") {
             emit systemStatusReceived(msg);
         } else if (msgType == "motor_state") {
             MotorState state = parseMotorState(msg);

@@ -89,6 +89,9 @@ void CameraGridWidget::setAuxiliaryWidget(QWidget *widget)
     if (!widget || widget == m_auxiliaryWidget) {
         return;
     }
+    if (kCameraCount >= m_displayLayout->count()) {
+        return;
+    }
 
     QWidget *old = m_displayLayout->removeWidget(kCameraCount);
     if (old && old != widget) {

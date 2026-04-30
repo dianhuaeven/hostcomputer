@@ -172,7 +172,7 @@ private:
     static const int ACK_TIMEOUT_MS = 2000;
     static const int ACK_CHECK_INTERVAL_MS = 100;
     static const int MAX_FRAME_BYTES = 1024 * 1024;
-    static const int MAX_CAMERA_COUNT = 5;
+    static const int MAX_CAMERA_COUNT = 6;
 };
 
 } // namespace Communication

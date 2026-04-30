@@ -29,6 +29,11 @@
 #include <QTextEdit>
 #include <QThread>
 #include <QJsonArray>
+#include <QGroupBox>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QSizePolicy>
+#include <QSplitter>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <shellapi.h>
@@ -202,6 +207,7 @@ void MainWindow::setupDisplayLayout()
     m_controlPanel = ui->controlPanelWidget;
     m_robotAttitudeWidget = ui->robotAttitudeWidget;
     m_logTabs = ui->logTabs;
+    setupBottomActionPanel();
     ui->verticalLayout_left_workspace->setStretch(0, 1);
     ui->verticalLayout_left_workspace->setStretch(1, 0);
     ui->verticalLayout_right->setStretch(0, 1);
@@ -257,6 +263,220 @@ void MainWindow::setupDisplayLayout()
             this, [this]() {
         triggerEmergencyStop(QStringLiteral("control_panel"));
     });
+}
+
+void MainWindow::setupBottomActionPanel()
+{
+    if (!m_logTabs) {
+        return;
+    }
+
+    auto *bottomSplit = new QSplitter(Qt::Horizontal, ui->widget_left_workspace);
+    bottomSplit->setObjectName(QStringLiteral("splitter_bottom_logs_actions"));
+    bottomSplit->setChildrenCollapsible(false);
+    bottomSplit->setHandleWidth(6);
+    bottomSplit->setMinimumHeight(145);
+    bottomSplit->setMaximumHeight(185);
+
+    ui->verticalLayout_left_workspace->removeWidget(m_logTabs);
+    m_logTabs->setMinimumHeight(0);
+    m_logTabs->setMaximumHeight(16777215);
+    bottomSplit->addWidget(m_logTabs);
+
+    auto *actionPanel = new QWidget(bottomSplit);
+    actionPanel->setObjectName(QStringLiteral("widget_bottom_action_panel"));
+    actionPanel->setMinimumWidth(300);
+    actionPanel->setStyleSheet(
+        "QGroupBox { font-weight: 700; border: 1px solid #dbe3ef; border-radius: 6px; margin-top: 8px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #334155; }"
+        "QPushButton { min-height: 26px; padding: 2px 10px; }");
+
+    auto *actionLayout = new QHBoxLayout(actionPanel);
+    actionLayout->setContentsMargins(0, 0, 0, 0);
+    actionLayout->setSpacing(8);
+
+    auto *armGroup = new QGroupBox(QStringLiteral("机械臂 Action"), actionPanel);
+    auto *armLayout = new QVBoxLayout(armGroup);
+    armLayout->setContentsMargins(8, 8, 8, 8);
+    armLayout->setSpacing(6);
+
+    m_armActionList = new QListWidget(armGroup);
+    m_armActionList->setObjectName(QStringLiteral("list_arm_named_targets"));
+    m_armActionList->setMinimumHeight(76);
+    m_armActionList->addItem(QStringLiteral("等待下位机下发 MoveIt 固定位姿..."));
+    m_armActionList->item(0)->setFlags(Qt::NoItemFlags);
+
+    auto *armButtonLayout = new QHBoxLayout();
+    m_refreshArmActionButton = new QPushButton(QStringLiteral("刷新位姿"), armGroup);
+    m_executeArmActionButton = new QPushButton(QStringLiteral("运动到该位置"), armGroup);
+    m_executeArmActionButton->setEnabled(false);
+    armButtonLayout->addWidget(m_refreshArmActionButton);
+    armButtonLayout->addWidget(m_executeArmActionButton);
+
+    armLayout->addWidget(m_armActionList, 1);
+    armLayout->addLayout(armButtonLayout);
+
+    auto *monitorGroup = new QGroupBox(QStringLiteral("任务标志"), actionPanel);
+    monitorGroup->setMaximumWidth(118);
+    auto *monitorLayout = new QVBoxLayout(monitorGroup);
+    monitorLayout->setContentsMargins(8, 8, 8, 8);
+    monitorLayout->setSpacing(8);
+
+    auto *thermalButton = new QPushButton(QStringLiteral("热源监测"), monitorGroup);
+    auto *dynamicButton = new QPushButton(QStringLiteral("动态监测"), monitorGroup);
+    auto *dangerButton = new QPushButton(QStringLiteral("危险标志"), monitorGroup);
+    monitorLayout->addWidget(thermalButton);
+    monitorLayout->addWidget(dynamicButton);
+    monitorLayout->addWidget(dangerButton);
+    monitorLayout->addStretch();
+
+    actionLayout->addWidget(armGroup, 1);
+    actionLayout->addWidget(monitorGroup, 0);
+
+    bottomSplit->addWidget(actionPanel);
+    bottomSplit->setStretchFactor(0, 3);
+    bottomSplit->setStretchFactor(1, 1);
+    bottomSplit->setSizes({900, 300});
+    ui->verticalLayout_left_workspace->addWidget(bottomSplit);
+
+    connect(m_refreshArmActionButton, &QPushButton::clicked,
+            this, &MainWindow::refreshArmNamedTargets);
+    connect(m_executeArmActionButton, &QPushButton::clicked,
+            this, &MainWindow::executeSelectedArmNamedTarget);
+    connect(m_armActionList, &QListWidget::currentItemChanged,
+            this, [this](QListWidgetItem *current) {
+        m_executeArmActionButton->setEnabled(current && current->flags().testFlag(Qt::ItemIsEnabled)
+                                             && !current->data(Qt::UserRole).toString().isEmpty());
+    });
+
+    connect(thermalButton, &QPushButton::clicked, this, [this]() {
+        handleMonitorCommand(QStringLiteral("热源监测"), QStringLiteral("thermal_monitor"));
+    });
+    connect(dynamicButton, &QPushButton::clicked, this, [this]() {
+        handleMonitorCommand(QStringLiteral("动态监测"), QStringLiteral("dynamic_monitor"));
+    });
+    connect(dangerButton, &QPushButton::clicked, this, [this]() {
+        handleMonitorCommand(QStringLiteral("危险标志"), QStringLiteral("danger_sign"));
+    });
+}
+
+void MainWindow::handleMonitorCommand(const QString &label, const QString &command)
+{
+    addCommand(QString("[监测] 请求 %1").arg(label));
+    if (m_controller && m_controller->isTcpConnected()) {
+        m_controller->sendSystemCommand(command);
+    } else {
+        addError(QString("[监测] TCP未连接，未发送 %1").arg(label));
+    }
+}
+
+void MainWindow::refreshArmNamedTargets()
+{
+    addCommand("[机械臂] 请求刷新 MoveIt 固定位姿");
+    if (m_controller && m_controller->isTcpConnected()) {
+        m_controller->sendSystemCommand(QStringLiteral("request_arm_named_targets"));
+    } else {
+        addError("[机械臂] TCP未连接，未请求固定位姿");
+    }
+}
+
+void MainWindow::executeSelectedArmNamedTarget()
+{
+    if (!m_armActionList) {
+        return;
+    }
+
+    QListWidgetItem *item = m_armActionList->currentItem();
+    const QString targetName = item ? item->data(Qt::UserRole).toString() : QString();
+    if (targetName.isEmpty()) {
+        addError("[机械臂] 未选择有效固定位姿");
+        return;
+    }
+
+    addCommand(QString("[机械臂] 请求运动到固定位姿: %1").arg(targetName));
+    if (m_controller && m_controller->isTcpConnected()) {
+        QJsonObject params;
+        params["target"] = targetName;
+        m_controller->sendSystemCommand(QStringLiteral("move_arm_named_target"), params);
+    } else {
+        addError(QString("[机械臂] TCP未连接，未发送固定位姿: %1").arg(targetName));
+    }
+}
+
+void MainWindow::updateArmNamedTargets(const QJsonObject &message)
+{
+    if (!m_armActionList) {
+        return;
+    }
+
+    const QStringList targetFields = {
+        QStringLiteral("targets"),
+        QStringLiteral("named_targets"),
+        QStringLiteral("poses"),
+        QStringLiteral("actions"),
+        QStringLiteral("positions"),
+        QStringLiteral("arm_named_targets"),
+        QStringLiteral("moveit_named_targets"),
+    };
+
+    QJsonArray targets;
+    for (const QString &field : targetFields) {
+        const QJsonValue value = message.value(field);
+        if (value.isArray()) {
+            targets = value.toArray();
+            if (!targets.isEmpty()) {
+                break;
+            }
+        }
+    }
+
+    m_armActionList->clear();
+
+    for (const QJsonValue &value : targets) {
+        QString name;
+        QString description;
+        if (value.isString()) {
+            name = value.toString();
+        } else if (value.isObject()) {
+            const QJsonObject object = value.toObject();
+            name = object.value(QStringLiteral("name")).toString();
+            if (name.isEmpty()) {
+                name = object.value(QStringLiteral("target")).toString();
+            }
+            if (name.isEmpty()) {
+                name = object.value(QStringLiteral("id")).toString();
+            }
+            if (name.isEmpty()) {
+                name = object.value(QStringLiteral("label")).toString();
+            }
+            description = object.value(QStringLiteral("description")).toString();
+            if (description.isEmpty()) {
+                description = object.value(QStringLiteral("display_name")).toString();
+            }
+        }
+
+        if (name.isEmpty()) {
+            continue;
+        }
+
+        auto *item = new QListWidgetItem(description.isEmpty()
+                                             ? name
+                                             : QString("%1  -  %2").arg(name, description));
+        item->setData(Qt::UserRole, name);
+        m_armActionList->addItem(item);
+    }
+
+    if (m_armActionList->count() == 0) {
+        auto *emptyItem = new QListWidgetItem(QStringLiteral("下位机未返回可用固定位姿"));
+        emptyItem->setFlags(Qt::NoItemFlags);
+        m_armActionList->addItem(emptyItem);
+        m_executeArmActionButton->setEnabled(false);
+        addError("[机械臂] 固定位姿列表为空");
+        return;
+    }
+
+    m_armActionList->setCurrentRow(0);
+    addCommand(QString("[机械臂] 已更新固定位姿列表: %1 个").arg(m_armActionList->count()));
 }
 
 void MainWindow::setupKeyboardController()
@@ -323,7 +543,7 @@ void MainWindow::setupTimers()
 
 void MainWindow::setupConnections()
 {
-    // 按钮连接已在UI文件中自动处理，这里可以添加额外的连接
+    // 按钮连接已在UI文件和组件初始化中处理，这里保留给跨区域连接扩展。
 }
 
 void MainWindow::setupStatusBar()
@@ -678,6 +898,28 @@ void MainWindow::on_btn_emergency_stop_clicked()
     triggerEmergencyStop(QStringLiteral("button"));
 }
 
+void MainWindow::on_btn_clear_emergency_clicked()
+{
+    addCommand("[急停] 请求解除急停");
+
+    clearOperatorInputSnapshot();
+    if (m_keyboardController) {
+        m_keyboardController->clearPressedKeys();
+    }
+
+    if (m_controller && m_controller->isTcpConnected()) {
+        if (m_controller->sendSystemCommand(QStringLiteral("clear_emergency"))) {
+            addCommand("[急停] 解除急停指令已发送，等待ACK");
+        } else {
+            addError("[急停] 解除急停指令发送失败");
+        }
+    } else {
+        addError("[急停] TCP未连接，无法解除下位机急停状态");
+    }
+
+    statusBar()->showMessage("已请求解除急停", 3000);
+}
+
 void MainWindow::clearOperatorInputSnapshot()
 {
     m_keyboardPressedKeys.clear();
@@ -792,14 +1034,6 @@ void MainWindow::updateHeartbeatDisplay()
 void MainWindow::updateGamepadDisplay()
 {
     bool connected = m_handleKey && m_handleKey->isConnected();
-    QString statusText = connected ? "已连接" : "未连接";
-    QString styleSheet = connected ?
-        "color: green; font-weight: bold;" :
-        "color: red; font-weight: bold;";
-
-    ui->label_gamepad_value->setText(statusText);
-    ui->label_gamepad_value->setStyleSheet(styleSheet);
-    ui->btn_gamepad_connect->setText(connected ? "断开手柄" : "连接手柄");
     if (m_controlPanel) {
         m_controlPanel->setGamepadConnected(connected);
     }
@@ -1215,6 +1449,7 @@ void MainWindow::onTcpConnected()
     updateConnectionStatus(true);
     addCommand("[TCP] 已连接到ROS节点");
     sendOperatorInputSnapshot();
+    refreshArmNamedTargets();
     if (m_controller) {
         statusBar()->showMessage(QString("TCP已连接: %1:%2")
             .arg(m_controller->getROSHost()).arg(m_controller->getROSPort()));
@@ -1388,6 +1623,14 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
         return;
     }
 
+    if (type == "arm_named_targets"
+        || type == "moveit_named_targets"
+        || type == "moveit_named_poses"
+        || type == "arm_action_list") {
+        updateArmNamedTargets(message);
+        return;
+    }
+
     if (type == "sync_request_sent") {
         addCommand(QString("[同步] request reason=%1 sync=%2 cameras=%3")
                    .arg(message["reason"].toString("unknown"))
@@ -1441,6 +1684,15 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
         ControlMode statusMode = m_controlMode;
         if (parseControlMode(message["control_mode"].toString(), &statusMode)) {
             applyControlMode(statusMode);
+        }
+        if (message.contains("targets")
+            || message.contains("named_targets")
+            || message.contains("poses")
+            || message.contains("actions")
+            || message.contains("positions")
+            || message.contains("arm_named_targets")
+            || message.contains("moveit_named_targets")) {
+            updateArmNamedTargets(message);
         }
         if (message.contains("last_operator_input_seq")) {
             return;

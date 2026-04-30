@@ -24,6 +24,8 @@ QT_END_NAMESPACE
 
 class QTextEdit;
 class QTabWidget;
+class QListWidget;
+class QPushButton;
 class MotorRuntimeCarouselWidget;
 
 // 控制模式枚举
@@ -68,6 +70,7 @@ private slots:
     void on_btn_clear_commands_clicked();
     void on_btn_clear_errors_clicked();
     void on_btn_emergency_stop_clicked();
+    void on_btn_clear_emergency_clicked();
     void on_btn_gamepad_connect_clicked();
 
     void updateSystemStatus();  // 定时更新系统状态
@@ -91,6 +94,11 @@ private:
     QString getCurrentTimestamp() const;
     void applyControlMode(ControlMode mode);
     void triggerEmergencyStop(const QString &source);
+    void setupBottomActionPanel();
+    void handleMonitorCommand(const QString &label, const QString &command);
+    void refreshArmNamedTargets();
+    void executeSelectedArmNamedTarget();
+    void updateArmNamedTargets(const QJsonObject &message);
 
 private slots:
     // Controller层信号处理
@@ -132,6 +140,9 @@ private:
     ControlPanelWidget* m_controlPanel;
     MotorRuntimeCarouselWidget* m_motorRuntimeWidget = nullptr;
     QTabWidget* m_logTabs = nullptr;
+    QListWidget* m_armActionList = nullptr;
+    QPushButton* m_executeArmActionButton = nullptr;
+    QPushButton* m_refreshArmActionButton = nullptr;
 
     // 手柄输入驱动
     HandleKey* m_handleKey;

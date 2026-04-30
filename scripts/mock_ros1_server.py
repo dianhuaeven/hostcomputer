@@ -46,6 +46,17 @@ CAMERAS = [
         "fps": 25,
         "bitrate_kbps": 0,
     },
+    {
+        "camera_id": 5,
+        "name": "back",
+        "online": False,
+        "rtsp_url": "",
+        "codec": "h264",
+        "width": 1280,
+        "height": 720,
+        "fps": 25,
+        "bitrate_kbps": 0,
+    },
 ]
 
 

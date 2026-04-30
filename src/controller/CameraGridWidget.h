@@ -18,7 +18,7 @@ class CameraGridWidget : public QWidget
     Q_OBJECT
 
 public:
-    static constexpr int kCameraCount = 5;
+    static constexpr int kCameraCount = 6;
 
     explicit CameraGridWidget(QWidget *parent = nullptr);
 
