@@ -91,6 +91,16 @@ bool Controller::sendMotorCommand(const Communication::MotorState &state)
     return m_tcpClient->sendMotorCommand(state);
 }
 
+bool Controller::sendOperatorInput(const Communication::OperatorInputState &inputState)
+{
+    if (!m_tcpClient || !m_tcpClient->isConnected()) {
+        qWarning() << "TCP not connected, cannot send operator input";
+        return false;
+    }
+
+    return m_tcpClient->sendOperatorInput(inputState);
+}
+
 bool Controller::sendControlCommand(const Communication::Command &command)
 {
     if (!m_tcpClient || !m_tcpClient->isConnected()) {
@@ -99,16 +109,6 @@ bool Controller::sendControlCommand(const Communication::Command &command)
     }
 
     return m_tcpClient->sendControlCommand(command);
-}
-
-bool Controller::sendVelocityCommand(float linearX, float linearY, float angularZ)
-{
-    if (!m_tcpClient || !m_tcpClient->isConnected()) {
-        qWarning() << "TCP not connected, cannot send velocity command";
-        return false;
-    }
-
-    return m_tcpClient->sendVelocityCommand(linearX, linearY, angularZ);
 }
 
 bool Controller::sendJointControl(int jointId, float position, float velocity)
@@ -121,14 +121,14 @@ bool Controller::sendJointControl(int jointId, float position, float velocity)
     return m_tcpClient->sendJointControl(jointId, position, velocity);
 }
 
-bool Controller::sendEmergencyStop()
+bool Controller::sendEmergencyStop(const QString &source)
 {
     if (!m_tcpClient || !m_tcpClient->isConnected()) {
         qWarning() << "TCP not connected, cannot send emergency stop";
         return false;
     }
 
-    return m_tcpClient->sendEmergencyStop();
+    return m_tcpClient->sendEmergencyStop(source);
 }
 
 bool Controller::sendSystemCommand(const QString &command, const QJsonObject &params)
@@ -149,6 +149,26 @@ bool Controller::sendEndEffectorControl(float x, float y, float z, float roll, f
     }
 
     return m_tcpClient->sendEndEffectorControl(x, y, z, roll, pitch, yaw);
+}
+
+bool Controller::requestBridgeSync(const QString &reason)
+{
+    if (!m_tcpClient || !m_tcpClient->isConnected()) {
+        qWarning() << "TCP not connected, cannot request bridge sync";
+        return false;
+    }
+
+    return m_tcpClient->requestBridgeSync(reason);
+}
+
+bool Controller::requestCameraList()
+{
+    if (!m_tcpClient || !m_tcpClient->isConnected()) {
+        qWarning() << "TCP not connected, cannot request camera list";
+        return false;
+    }
+
+    return m_tcpClient->requestCameraList();
 }
 
 // ==================== TCP连接管理（供UI层对话框使用） ====================
@@ -190,7 +210,8 @@ quint16 Controller::getROSPort() const
 
 Controller::Statistics Controller::getTcpStatistics() const
 {
-    Statistics stats = {0, 0, 0, 0, 0, 0};
+    Statistics stats = {};
+    stats.lastHeartbeatRttMs = -1;
 
     if (m_tcpClient) {
         auto tcpStats = m_tcpClient->getStats();
@@ -200,6 +221,13 @@ Controller::Statistics Controller::getTcpStatistics() const
         stats.bytesReceived = tcpStats.bytesReceived;
         stats.connectionCount = tcpStats.connectionCount;
         stats.reconnectCount = tcpStats.reconnectCount;
+        stats.ackPendingCount = tcpStats.ackPendingCount;
+        stats.ackReceivedCount = tcpStats.ackReceivedCount;
+        stats.ackTimeoutCount = tcpStats.ackTimeoutCount;
+        stats.protocolErrorCount = tcpStats.protocolErrorCount;
+        stats.heartbeatTimeoutCount = tcpStats.heartbeatTimeoutCount;
+        stats.lastHeartbeatRttMs = tcpStats.lastHeartbeatRttMs;
+        stats.lastHeartbeatAckMs = tcpStats.lastHeartbeatAckMs;
     }
 
     return stats;
@@ -217,14 +245,20 @@ void Controller::setupConnections()
                 this, &Controller::onTcpDisconnected);
         connect(m_tcpClient, &Communication::ROS1TcpClient::connectionError,
                 this, &Controller::onTcpError);
+        connect(m_tcpClient, &Communication::ROS1TcpClient::heartbeatChanged,
+                this, &Controller::tcpHeartbeatChanged);
         connect(m_tcpClient, &Communication::ROS1TcpClient::motorStateReceived,
                 this, &Controller::onTcpMotorStateReceived);
+        connect(m_tcpClient, &Communication::ROS1TcpClient::jointRuntimeStatesReceived,
+                this, &Controller::onTcpJointRuntimeStatesReceived);
         connect(m_tcpClient, &Communication::ROS1TcpClient::co2DataReceived,
                 this, &Controller::onTcpCO2DataReceived);
         connect(m_tcpClient, &Communication::ROS1TcpClient::imuDataReceived,
                 this, &Controller::onTcpIMUDataReceived);
         connect(m_tcpClient, &Communication::ROS1TcpClient::cameraInfoReceived,
                 this, &Controller::onTcpCameraInfoReceived);
+        connect(m_tcpClient, &Communication::ROS1TcpClient::systemStatusReceived,
+                this, &Controller::onTcpSystemStatusReceived);
     }
 
     qDebug() << "Signal connections established";
@@ -253,6 +287,11 @@ void Controller::onTcpMotorStateReceived(const Communication::MotorState &state)
     emit motorStateReceived(state);
 }
 
+void Controller::onTcpJointRuntimeStatesReceived(const Communication::JointRuntimeStateList &states)
+{
+    emit jointRuntimeStatesReceived(states);
+}
+
 void Controller::onTcpCO2DataReceived(float ppm)
 {
     emit co2DataReceived(ppm);
@@ -268,6 +307,11 @@ void Controller::onTcpCameraInfoReceived(int cameraId, const QString &rtspUrl, b
                                          const QString &codec, int width, int height, int fps, int bitrate)
 {
     emit cameraInfoReceived(cameraId, online, codec, width, height, fps, bitrate, rtspUrl);
+}
+
+void Controller::onTcpSystemStatusReceived(const QJsonObject &status)
+{
+    emit protocolMessageReceived(status);
 }
 
 void Controller::handleError(const QString &error)

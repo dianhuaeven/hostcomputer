@@ -5,18 +5,16 @@
 #include <QTimer>
 #include <QDateTime>
 #include <QLabel>
-#include <array>
+#include <QStringList>
 #include "src/communication/SharedStructs.h"
 
 #include "src/controller/controller.h"
 #include "src/controller/KeyboardController.h"
-#include "src/controller/DisplayLayoutManager.h"
-#include "src/controller/CO2DisplayWidget.h"
-#include "src/controller/GamepadDisplayWidget.h"
+#include "src/controller/CameraGridWidget.h"
+#include "src/controller/ControlPanelWidget.h"
 #include "src/controller/handlekey.h"
-#include "src/controller/RtspPlayerWidget.h"
-#include "src/controller/RobotViewModel.h"
-#include <QQuickWidget>
+#include "src/controller/RobotAttitudeWidget.h"
+#include "src/controller/TelemetryPanelWidget.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -24,10 +22,16 @@ class MainWindow;
 }
 QT_END_NAMESPACE
 
+class QTextEdit;
+class QTabWidget;
+class QListWidget;
+class QPushButton;
+class MotorRuntimeCarouselWidget;
+
 // 控制模式枚举
 enum class ControlMode {
-    Vehicle = 0,  // 车体运动模式 (D-Pad上)
-    Arm = 2       // 机械臂操控模式 (D-Pad下)
+    Vehicle = 0,
+    Arm = 2
 };
 
 class MainWindow : public QMainWindow
@@ -66,6 +70,7 @@ private slots:
     void on_btn_clear_commands_clicked();
     void on_btn_clear_errors_clicked();
     void on_btn_emergency_stop_clicked();
+    void on_btn_clear_emergency_clicked();
     void on_btn_gamepad_connect_clicked();
 
     void updateSystemStatus();  // 定时更新系统状态
@@ -82,15 +87,18 @@ private:
     void updateConnectionDisplay();
     void updateHeartbeatDisplay();
     void updateGamepadDisplay();
+    void sendOperatorInputSnapshot();
+    void clearOperatorInputSnapshot();
     void formatAndAddCommand(const QString& command);
     void formatAndAddError(const QString& error);
     QString getCurrentTimestamp() const;
-    void triggerEmergencyStop();
-
-    // 模式切换
-    void switchControlMode(ControlMode mode);
-    void handleGamepadVehicleMode(const ControllerState &state);
-    void handleGamepadArmMode(const ControllerState &state);
+    void applyControlMode(ControlMode mode);
+    void triggerEmergencyStop(const QString &source);
+    void setupBottomActionPanel();
+    void handleMonitorCommand(const QString &label, const QString &command);
+    void refreshArmNamedTargets();
+    void executeSelectedArmNamedTarget();
+    void updateArmNamedTargets(const QJsonObject &message);
 
 private slots:
     // Controller层信号处理
@@ -99,11 +107,13 @@ private slots:
     void onTcpError(const QString &error);
     void onTcpHeartbeatChanged(bool online);
     void onMotorStateReceived(const Communication::MotorState &state);
+    void onJointRuntimeStatesReceived(const Communication::JointRuntimeStateList &states);
     void onCO2DataReceived(float ppm);
     void onIMUDataReceived(float roll, float pitch, float yaw, float accelX, float accelY, float accelZ);
     void onCameraInfoReceived(int cameraId, bool online, const QString &codec,
                               int width, int height, int fps, int bitrate,
                               const QString &rtspUrl);
+    void onProtocolMessageReceived(const QJsonObject &message);
 
     // 手柄信号处理
     void onGamepadStateReceived(const ControllerState &state);
@@ -120,24 +130,29 @@ private:
     // 键盘控制器
     KeyboardController* m_keyboardController;
 
-    // 布局管理器
-    DisplayLayoutManager* m_displayLayout;
+    // 摄像头网格
+    CameraGridWidget* m_cameraGridWidget;
 
-    // CO2显示控件
-    CO2DisplayWidget* m_co2Widget;
+    // 遥测状态面板
+    TelemetryPanelWidget* m_telemetryPanel;
 
-    // 手柄显示控件
-    GamepadDisplayWidget* m_gamepadWidget;
-
-    // RTSP视频播放控件 (索引0-4)
-    std::array<RtspPlayerWidget*, 5> m_rtspWidgets = {};
+    // 控制面板
+    ControlPanelWidget* m_controlPanel;
+    MotorRuntimeCarouselWidget* m_motorRuntimeWidget = nullptr;
+    QTabWidget* m_logTabs = nullptr;
+    QListWidget* m_armActionList = nullptr;
+    QPushButton* m_executeArmActionButton = nullptr;
+    QPushButton* m_refreshArmActionButton = nullptr;
 
     // 手柄输入驱动
     HandleKey* m_handleKey;
 
     // 3D机器人姿态视图
-    QQuickWidget* m_robotView = nullptr;
-    RobotViewModel* m_robotViewModel = nullptr;
+    RobotAttitudeWidget* m_robotAttitudeWidget = nullptr;
+
+    // 数据显示
+    QTextEdit* m_textData = nullptr;
+    QLabel* m_statusErrorLabel = nullptr;
 
     // 状态管理
     bool m_isConnected = false;
@@ -152,8 +167,12 @@ private:
     int m_errorCount = 0;
     qint64 m_lastEmergencyStopMs = 0;
 
-    // 控制模式
+    // 协议兼容字段；普通输入语意由下位机解析
     ControlMode m_controlMode = ControlMode::Vehicle;
+    QStringList m_keyboardPressedKeys;
+    ControllerState m_latestGamepadState = {};
+    bool m_gamepadConnected = false;
+    bool m_gamepadStickEmergencyHeld = false;
 
     // 定时器
     QTimer* m_statusTimer;

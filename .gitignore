@@ -1,6 +1,14 @@
 build/
 build_test/
+build-*/
 test-logs/
+.vscode/
+logs/
+__pycache__/
+*.pyc
 
 *.user
+*.user.*
+CMakeLists.txt.user*
 *.autosave
+.qodo/

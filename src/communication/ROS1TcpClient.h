@@ -8,6 +8,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QByteArray>
+#include <QHash>
+#include "HostProtocol.h"
 #include "SharedStructs.h"
 #include "Logger.h"
 #include "ErrorHandler.h"
@@ -36,12 +38,14 @@ public:
 
     // 数据发送（线程安全）
     bool sendMotorCommand(const MotorState &motorState);
+    bool sendOperatorInput(const OperatorInputState &inputState);
     bool sendJointControl(int jointId, float position, float velocity = 0.0f);
-    bool sendVelocityCommand(float linearX, float linearY, float angularZ);
-    bool sendEmergencyStop();
+    bool sendEmergencyStop(const QString &source);
     bool sendSystemCommand(const QString &command, const QJsonObject &params = QJsonObject());
     bool sendEndEffectorControl(float x, float y, float z, float roll, float pitch, float yaw);
     bool sendControlCommand(const Command &command);
+    bool requestBridgeSync(const QString &reason);
+    bool requestCameraList();
 
     // 状态查询
     QString getConnectionStatus() const;
@@ -57,6 +61,13 @@ public:
         quint64 bytesReceived;
         quint64 connectionCount;
         quint64 reconnectCount;
+        quint64 ackPendingCount;
+        quint64 ackReceivedCount;
+        quint64 ackTimeoutCount;
+        quint64 protocolErrorCount;
+        quint64 heartbeatTimeoutCount;
+        qint64 lastHeartbeatRttMs;
+        qint64 lastHeartbeatAckMs;
     };
     Stats getStats() const;
     void resetStats();
@@ -69,6 +80,7 @@ signals:
 
     // 数据接收信号
     void motorStateReceived(const MotorState &motorState);
+    void jointRuntimeStatesReceived(const JointRuntimeStateList &states);
     void jointDataReceived(int jointId, float position, float current, float torque);
     void systemStatusReceived(const QJsonObject &status);
     void rawMessageReceived(const QByteArray &message);
@@ -76,6 +88,7 @@ signals:
     void imuDataReceived(float roll, float pitch, float yaw, float accelX, float accelY, float accelZ);
     void cameraInfoReceived(int cameraId, const QString &rtspUrl, bool online,
                             const QString &codec, int width, int height, int fps, int bitrateKbps);
+    void heartbeatChanged(bool online);
 
     // 统计信息更新信号
     void statsUpdated(const Stats &stats);
@@ -95,12 +108,38 @@ private slots:
     void handleReadyRead();
     void handleError(QAbstractSocket::SocketError error);
     void checkConnection();
+    void checkAckTimeouts();
 
 private:
+    struct PendingAck {
+        quint64 seq = 0;
+        QString ackType;
+        qint64 sentAtMs = 0;
+        qint64 deadlineMs = 0;
+    };
+
     void setupConnection();
     bool sendMessage(const QJsonObject &message);
+    bool sendTrackedMessage(const QJsonObject &message, const QString &ackType);
+    quint64 nextSequence();
+    void registerPendingAck(const QJsonObject &message, const QString &ackType);
+    void handleAckMessage(const QJsonObject &message, qint64 receivedAtMs);
+    void handleHeartbeatAck(const QJsonObject &message, qint64 receivedAtMs);
+    void failPendingAck(const PendingAck &pending, const QString &eventType,
+                        const QString &message, int code, qint64 nowMs);
+    void failAllPendingAcks(const QString &eventType, const QString &message, int code);
+    bool validateIncomingMessage(const QJsonObject &message, QString *errorMessage, int *errorCode) const;
+    bool validateCameraObject(const QJsonObject &camera, QString *errorMessage, int *errorCode) const;
+    void processCameraInfoMessage(const QJsonObject &message);
+    void processCameraListResponse(const QJsonObject &message);
+    void requestBridgeState(const QString &reason);
+    void emitProtocolError(qint64 seq, int code, const QString &message);
+    void closeForProtocolError(qint64 seq, int code, const QString &message);
+    void trimExpiredHeartbeats(qint64 nowMs);
     void processReceivedData();
     MotorState parseMotorState(const QJsonObject &json);
+    JointRuntimeStateList parseJointRuntimeStates(const QJsonObject &json);
+    void setHeartbeatOnline(bool online);
     void emitStatsUpdate();
 
 private:
@@ -110,10 +149,18 @@ private:
     QByteArray m_receivedData;
     QTimer *m_heartbeatTimer;
     QTimer *m_reconnectTimer;
+    QTimer *m_ackTimer;
 
     bool m_isConnected;
     bool m_autoReconnect;
+    bool m_manualDisconnectRequested;
+    bool m_heartbeatOnline;
     int m_reconnectAttempts;
+    qint64 m_lastMessageReceivedMs;
+    qint64 m_lastHeartbeatAckMs;
+    quint64 m_nextSequence;
+    QHash<quint64, PendingAck> m_pendingAcks;
+    QHash<quint64, qint64> m_pendingHeartbeats;
 
     // 统计信息
     Stats m_stats;
@@ -122,6 +169,10 @@ private:
     static const int MAX_RECONNECT_ATTEMPTS = 5;
     static const int HEARTBEAT_INTERVAL_MS = 1000;
     static const int RECONNECT_INTERVAL_MS = 3000;
+    static const int ACK_TIMEOUT_MS = 2000;
+    static const int ACK_CHECK_INTERVAL_MS = 100;
+    static const int MAX_FRAME_BYTES = 1024 * 1024;
+    static const int MAX_CAMERA_COUNT = 6;
 };
 
 } // namespace Communication

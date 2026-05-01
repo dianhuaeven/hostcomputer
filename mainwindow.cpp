@@ -1,9 +1,8 @@
 #include "mainwindow.h"
 #include "./ui_mainwindow.h"
+#include "src/communication/HostProtocol.h"
 #include "src/communication/SharedStructs.h"
-#include "src/controller/RobotViewModel.h"
-#include <QQuickWidget>
-#include <QQmlContext>
+#include "src/controller/MotorRuntimeCarouselWidget.h"
 #include <QtGlobal>
 #include <QSpinBox>
 
@@ -27,20 +26,95 @@
 #include <QSettings>
 #include <QNetworkInterface>
 #include <QFrame>
+#include <QTextEdit>
 #include <QThread>
+#include <QJsonArray>
+#include <QGroupBox>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QSizePolicy>
+#include <QSplitter>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <shellapi.h>
 #endif
+
+namespace {
+
+double normalizeStickAxis(int16_t value)
+{
+    return qBound(-1.0, static_cast<double>(value) / 32767.0, 1.0);
+}
+
+double normalizeTriggerAxis(uint8_t value)
+{
+    return qBound(0.0, static_cast<double>(value) / 255.0, 1.0);
+}
+
+Communication::GamepadInputState makeGamepadInputState(const ControllerState &state, bool connected)
+{
+    Communication::GamepadInputState gamepad;
+    gamepad.connected = connected;
+
+    gamepad.buttons.a = state.buttonA;
+    gamepad.buttons.b = state.buttonB;
+    gamepad.buttons.x = state.buttonX;
+    gamepad.buttons.y = state.buttonY;
+    gamepad.buttons.start = state.buttonStart;
+    gamepad.buttons.back = state.buttonBack;
+    gamepad.buttons.lb = state.leftShoulder;
+    gamepad.buttons.rb = state.rightShoulder;
+    gamepad.buttons.l3 = state.leftThumb;
+    gamepad.buttons.r3 = state.rightThumb;
+    gamepad.buttons.dpadUp = state.dpadUp;
+    gamepad.buttons.dpadDown = state.dpadDown;
+    gamepad.buttons.dpadLeft = state.dpadLeft;
+    gamepad.buttons.dpadRight = state.dpadRight;
+
+    gamepad.axes.leftX = connected ? normalizeStickAxis(state.sThumbLX) : 0.0;
+    gamepad.axes.leftY = connected ? normalizeStickAxis(state.sThumbLY) : 0.0;
+    gamepad.axes.rightX = connected ? normalizeStickAxis(state.sThumbRX) : 0.0;
+    gamepad.axes.rightY = connected ? normalizeStickAxis(state.sThumbRY) : 0.0;
+    gamepad.axes.lt = connected ? normalizeTriggerAxis(state.bLeftTrigger) : 0.0;
+    gamepad.axes.rt = connected ? normalizeTriggerAxis(state.bRightTrigger) : 0.0;
+
+    return gamepad;
+}
+
+QString modeNameForProtocol(ControlMode mode)
+{
+    return mode == ControlMode::Arm ? QStringLiteral("arm") : QStringLiteral("vehicle");
+}
+
+QString displayNameForControlMode(ControlMode mode)
+{
+    return mode == ControlMode::Arm ? QStringLiteral("机械臂操控") : QStringLiteral("车体运动");
+}
+
+bool parseControlMode(const QString &modeText, ControlMode *mode)
+{
+    const QString normalized = modeText.trimmed().toLower();
+    if (normalized == QStringLiteral("arm")) {
+        *mode = ControlMode::Arm;
+        return true;
+    }
+    if (normalized == QStringLiteral("vehicle") || normalized == QStringLiteral("base")) {
+        *mode = ControlMode::Vehicle;
+        return true;
+    }
+    return false;
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
     , m_controller(nullptr)
     , m_keyboardController(nullptr)
-    , m_displayLayout(nullptr)
-    , m_co2Widget(nullptr)
-    , m_gamepadWidget(nullptr)
+    , m_cameraGridWidget(nullptr)
+    , m_telemetryPanel(nullptr)
+    , m_controlPanel(nullptr)
     , m_handleKey(nullptr)
 {
     ui->setupUi(this);
@@ -49,6 +123,7 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle("上位机v2");
     resize(1920, 1080);
     setMinimumSize(1600, 900);
+    m_statusErrorLabel = ui->label_status_error_count;
 
     // 初始化组件
     setupController();
@@ -61,7 +136,7 @@ MainWindow::MainWindow(QWidget *parent)
     QShortcut *spaceStop = new QShortcut(QKeySequence(Qt::Key_Space), this);
     spaceStop->setContext(Qt::ApplicationShortcut);
     connect(spaceStop, &QShortcut::activated, this, [this]() {
-        triggerEmergencyStop();
+        triggerEmergencyStop(QStringLiteral("keyboard_space"));
     });
 
     // 设置连接和状态栏
@@ -106,9 +181,11 @@ void MainWindow::setupController()
 
     // 数据接收
     connect(m_controller, &Controller::motorStateReceived, this, &MainWindow::onMotorStateReceived);
+    connect(m_controller, &Controller::jointRuntimeStatesReceived, this, &MainWindow::onJointRuntimeStatesReceived);
     connect(m_controller, &Controller::co2DataReceived, this, &MainWindow::onCO2DataReceived);
     connect(m_controller, &Controller::imuDataReceived, this, &MainWindow::onIMUDataReceived);
     connect(m_controller, &Controller::cameraInfoReceived, this, &MainWindow::onCameraInfoReceived);
+    connect(m_controller, &Controller::protocolMessageReceived, this, &MainWindow::onProtocolMessageReceived);
 
     // 系统错误
     connect(m_controller, &Controller::systemError, this, [this](const QString &error) {
@@ -118,131 +195,326 @@ void MainWindow::setupController()
 
 void MainWindow::setupDisplayLayout()
 {
-    // 创建布局管理器（2行3列）
-    m_displayLayout = new DisplayLayoutManager(2, 3, this);
-
-    // 创建5个RTSP视频播放控件，放入索引0-4
-    for (int i = 0; i < 5; ++i) {
-        m_rtspWidgets[i] = new RtspPlayerWidget(i);
-        m_displayLayout->setWidget(i, m_rtspWidgets[i]);
-    }
-
-    // 索引5：垂直堆叠容器，CO2置顶，剩余空间留给后续控件
-    QWidget *statusPanel = new QWidget();
-    QVBoxLayout *statusLayout = new QVBoxLayout(statusPanel);
-    statusLayout->setContentsMargins(0, 0, 0, 0);
-    statusLayout->setSpacing(3);
-
-    m_co2Widget = new CO2DisplayWidget();
-    m_co2Widget->setMaximumHeight(120);
-    statusLayout->addWidget(m_co2Widget);
-
-    statusLayout->addStretch();
-
-    m_displayLayout->setWidget(5, statusPanel);
-
-    // 创建手柄显示控件，放到姿态模型右侧
-    m_gamepadWidget = new GamepadDisplayWidget();
-    m_gamepadWidget->setMaximumWidth(200);
-
-    // 手柄 + 下方预留空容器，垂直堆叠
-    QWidget *gamepadColumn = new QWidget();
-    QVBoxLayout *gamepadColumnLayout = new QVBoxLayout(gamepadColumn);
-    gamepadColumnLayout->setContentsMargins(0, 0, 0, 0);
-    gamepadColumnLayout->setSpacing(3);
-    gamepadColumnLayout->addWidget(m_gamepadWidget);
-
-    QWidget *reservedPanel = new QWidget();
-    gamepadColumnLayout->addWidget(reservedPanel);
-
-    gamepadColumn->setMaximumWidth(200);
-    ui->horizontalLayout_model_gamepad->addWidget(gamepadColumn);
-
-    // 把 DisplayLayoutManager 塞进 group_cameras 的布局中
-    ui->group_cameras->layout()->addWidget(m_displayLayout);
-
-    // 初始化3D机器人姿态视图，嵌入到 CarWidget
-    m_robotViewModel = new RobotViewModel(this);
-
-    m_robotView = new QQuickWidget(ui->CarWidget);
-    m_robotView->rootContext()->setContextProperty("robotViewModel", m_robotViewModel);
-    m_robotView->setSource(QUrl("qrc:/resources/qml/RobotView.qml"));
-    m_robotView->setResizeMode(QQuickWidget::SizeRootObjectToView);
-
-    // 打印加载错误
-    connect(m_robotView, &QQuickWidget::statusChanged, this, [this](QQuickWidget::Status status) {
-        if (status == QQuickWidget::Error) {
-            for (const auto &err : m_robotView->errors())
-                qWarning() << "[RobotView]" << err.toString();
+    m_cameraGridWidget = ui->cameraGridWidget;
+    connect(m_cameraGridWidget, &CameraGridWidget::cameraListRefreshRequested,
+            this, [this]() {
+        if (m_controller && m_controller->requestCameraList()) {
+            addCommand("[视频] 已请求刷新视频源列表");
         }
     });
 
-    QVBoxLayout *carLayout = new QVBoxLayout(ui->CarWidget);
-    carLayout->setContentsMargins(0, 0, 0, 0);
-    carLayout->addWidget(m_robotView);
-    ui->CarWidget->setLayout(carLayout);
+    m_motorRuntimeWidget = ui->motorRuntimeWidget;
+    m_controlPanel = ui->controlPanelWidget;
+    m_robotAttitudeWidget = ui->robotAttitudeWidget;
+    m_logTabs = ui->logTabs;
+    setupBottomActionPanel();
+    ui->verticalLayout_left_workspace->setStretch(0, 1);
+    ui->verticalLayout_left_workspace->setStretch(1, 0);
+    ui->verticalLayout_right->setStretch(0, 1);
+    ui->verticalLayout_right->setStretch(1, 1);
+    ui->verticalLayout_right->setStretch(2, 2);
+    ui->verticalLayout_right->setStretch(3, 0);
+
+    auto connectLifecycleButton = [this](QPushButton *button, const QString &command) {
+        connect(button, &QPushButton::clicked, this, [this, command]() {
+            addCommand(QString("[生命周期] 请求 %1").arg(command));
+            if (m_controller && m_controller->isTcpConnected()) {
+                m_controller->sendSystemCommand(command);
+            } else {
+                addError(QString("[生命周期] TCP未连接，未发送 %1").arg(command));
+            }
+        });
+    };
+
+    connectLifecycleButton(ui->btn_lifecycle_init, QStringLiteral("init"));
+    connectLifecycleButton(ui->btn_lifecycle_enable, QStringLiteral("enable"));
+    connectLifecycleButton(ui->btn_lifecycle_disable, QStringLiteral("disable"));
+    connectLifecycleButton(ui->btn_lifecycle_halt, QStringLiteral("halt"));
+    connectLifecycleButton(ui->btn_lifecycle_resume, QStringLiteral("resume"));
+    connectLifecycleButton(ui->btn_lifecycle_recover, QStringLiteral("recover"));
+    connectLifecycleButton(ui->btn_lifecycle_shutdown, QStringLiteral("shutdown"));
+
+    auto connectControlModeButton = [this](QPushButton *button, ControlMode controlMode,
+                                           const QString &protocolMode,
+                                           const QString &label) {
+        connect(button, &QPushButton::clicked, this, [this, controlMode, protocolMode, label]() {
+            addCommand(QString("[控制域] 请求切换到 %1").arg(label));
+            if (m_controller && m_controller->isTcpConnected()) {
+                QJsonObject params;
+                params["mode"] = protocolMode;
+                if (m_controller->sendSystemCommand(QStringLiteral("set_control_mode"), params)) {
+                    applyControlMode(controlMode);
+                    sendOperatorInputSnapshot();
+                }
+            } else {
+                addError(QString("[控制域] TCP未连接，未发送 %1").arg(label));
+            }
+        });
+    };
+
+    connectControlModeButton(ui->btn_mode_vehicle, ControlMode::Vehicle,
+                             QStringLiteral("vehicle"), QStringLiteral("底盘"));
+    connectControlModeButton(ui->btn_mode_arm, ControlMode::Arm,
+                             QStringLiteral("arm"), QStringLiteral("机械臂"));
+
+    connect(m_controlPanel, &ControlPanelWidget::gamepadConnectRequested,
+            this, &MainWindow::on_btn_gamepad_connect_clicked);
+    connect(m_controlPanel, &ControlPanelWidget::emergencyStopRequested,
+            this, [this]() {
+        triggerEmergencyStop(QStringLiteral("control_panel"));
+    });
+}
+
+void MainWindow::setupBottomActionPanel()
+{
+    if (!m_logTabs) {
+        return;
+    }
+
+    auto *bottomSplit = new QSplitter(Qt::Horizontal, ui->widget_left_workspace);
+    bottomSplit->setObjectName(QStringLiteral("splitter_bottom_logs_actions"));
+    bottomSplit->setChildrenCollapsible(false);
+    bottomSplit->setHandleWidth(6);
+    bottomSplit->setMinimumHeight(145);
+    bottomSplit->setMaximumHeight(185);
+
+    ui->verticalLayout_left_workspace->removeWidget(m_logTabs);
+    m_logTabs->setMinimumHeight(0);
+    m_logTabs->setMaximumHeight(16777215);
+    bottomSplit->addWidget(m_logTabs);
+
+    auto *actionPanel = new QWidget(bottomSplit);
+    actionPanel->setObjectName(QStringLiteral("widget_bottom_action_panel"));
+    actionPanel->setMinimumWidth(300);
+    actionPanel->setStyleSheet(
+        "QGroupBox { font-weight: 700; border: 1px solid #dbe3ef; border-radius: 6px; margin-top: 8px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #334155; }"
+        "QPushButton { min-height: 26px; padding: 2px 10px; }");
+
+    auto *actionLayout = new QHBoxLayout(actionPanel);
+    actionLayout->setContentsMargins(0, 0, 0, 0);
+    actionLayout->setSpacing(8);
+
+    auto *armGroup = new QGroupBox(QStringLiteral("机械臂 Action"), actionPanel);
+    auto *armLayout = new QVBoxLayout(armGroup);
+    armLayout->setContentsMargins(8, 8, 8, 8);
+    armLayout->setSpacing(6);
+
+    m_armActionList = new QListWidget(armGroup);
+    m_armActionList->setObjectName(QStringLiteral("list_arm_named_targets"));
+    m_armActionList->setMinimumHeight(76);
+    m_armActionList->addItem(QStringLiteral("等待下位机下发 MoveIt 固定位姿..."));
+    m_armActionList->item(0)->setFlags(Qt::NoItemFlags);
+
+    auto *armButtonLayout = new QHBoxLayout();
+    m_refreshArmActionButton = new QPushButton(QStringLiteral("刷新位姿"), armGroup);
+    m_executeArmActionButton = new QPushButton(QStringLiteral("运动到该位置"), armGroup);
+    m_executeArmActionButton->setEnabled(false);
+    armButtonLayout->addWidget(m_refreshArmActionButton);
+    armButtonLayout->addWidget(m_executeArmActionButton);
+
+    armLayout->addWidget(m_armActionList, 1);
+    armLayout->addLayout(armButtonLayout);
+
+    auto *monitorGroup = new QGroupBox(QStringLiteral("任务标志"), actionPanel);
+    monitorGroup->setMaximumWidth(118);
+    auto *monitorLayout = new QVBoxLayout(monitorGroup);
+    monitorLayout->setContentsMargins(8, 8, 8, 8);
+    monitorLayout->setSpacing(8);
+
+    auto *thermalButton = new QPushButton(QStringLiteral("热源监测"), monitorGroup);
+    auto *dynamicButton = new QPushButton(QStringLiteral("动态监测"), monitorGroup);
+    auto *dangerButton = new QPushButton(QStringLiteral("危险标志"), monitorGroup);
+    monitorLayout->addWidget(thermalButton);
+    monitorLayout->addWidget(dynamicButton);
+    monitorLayout->addWidget(dangerButton);
+    monitorLayout->addStretch();
+
+    actionLayout->addWidget(armGroup, 1);
+    actionLayout->addWidget(monitorGroup, 0);
+
+    bottomSplit->addWidget(actionPanel);
+    bottomSplit->setStretchFactor(0, 3);
+    bottomSplit->setStretchFactor(1, 1);
+    bottomSplit->setSizes({900, 300});
+    ui->verticalLayout_left_workspace->addWidget(bottomSplit);
+
+    connect(m_refreshArmActionButton, &QPushButton::clicked,
+            this, &MainWindow::refreshArmNamedTargets);
+    connect(m_executeArmActionButton, &QPushButton::clicked,
+            this, &MainWindow::executeSelectedArmNamedTarget);
+    connect(m_armActionList, &QListWidget::currentItemChanged,
+            this, [this](QListWidgetItem *current) {
+        m_executeArmActionButton->setEnabled(current && current->flags().testFlag(Qt::ItemIsEnabled)
+                                             && !current->data(Qt::UserRole).toString().isEmpty());
+    });
+
+    connect(thermalButton, &QPushButton::clicked, this, [this]() {
+        handleMonitorCommand(QStringLiteral("热源监测"), QStringLiteral("thermal_monitor"));
+    });
+    connect(dynamicButton, &QPushButton::clicked, this, [this]() {
+        handleMonitorCommand(QStringLiteral("动态监测"), QStringLiteral("dynamic_monitor"));
+    });
+    connect(dangerButton, &QPushButton::clicked, this, [this]() {
+        handleMonitorCommand(QStringLiteral("危险标志"), QStringLiteral("danger_sign"));
+    });
+}
+
+void MainWindow::handleMonitorCommand(const QString &label, const QString &command)
+{
+    addCommand(QString("[监测] 请求 %1").arg(label));
+    if (m_controller && m_controller->isTcpConnected()) {
+        m_controller->sendSystemCommand(command);
+    } else {
+        addError(QString("[监测] TCP未连接，未发送 %1").arg(label));
+    }
+}
+
+void MainWindow::refreshArmNamedTargets()
+{
+    addCommand("[机械臂] 请求刷新 MoveIt 固定位姿");
+    if (m_controller && m_controller->isTcpConnected()) {
+        m_controller->sendSystemCommand(QStringLiteral("request_arm_named_targets"));
+    } else {
+        addError("[机械臂] TCP未连接，未请求固定位姿");
+    }
+}
+
+void MainWindow::executeSelectedArmNamedTarget()
+{
+    if (!m_armActionList) {
+        return;
+    }
+
+    QListWidgetItem *item = m_armActionList->currentItem();
+    const QString targetName = item ? item->data(Qt::UserRole).toString() : QString();
+    if (targetName.isEmpty()) {
+        addError("[机械臂] 未选择有效固定位姿");
+        return;
+    }
+
+    addCommand(QString("[机械臂] 请求运动到固定位姿: %1").arg(targetName));
+    if (m_controller && m_controller->isTcpConnected()) {
+        QJsonObject params;
+        params["target"] = targetName;
+        m_controller->sendSystemCommand(QStringLiteral("move_arm_named_target"), params);
+    } else {
+        addError(QString("[机械臂] TCP未连接，未发送固定位姿: %1").arg(targetName));
+    }
+}
+
+void MainWindow::updateArmNamedTargets(const QJsonObject &message)
+{
+    if (!m_armActionList) {
+        return;
+    }
+
+    const QStringList targetFields = {
+        QStringLiteral("targets"),
+        QStringLiteral("named_targets"),
+        QStringLiteral("poses"),
+        QStringLiteral("actions"),
+        QStringLiteral("positions"),
+        QStringLiteral("arm_named_targets"),
+        QStringLiteral("moveit_named_targets"),
+    };
+
+    QJsonArray targets;
+    for (const QString &field : targetFields) {
+        const QJsonValue value = message.value(field);
+        if (value.isArray()) {
+            targets = value.toArray();
+            if (!targets.isEmpty()) {
+                break;
+            }
+        }
+    }
+
+    m_armActionList->clear();
+
+    for (const QJsonValue &value : targets) {
+        QString name;
+        QString description;
+        if (value.isString()) {
+            name = value.toString();
+        } else if (value.isObject()) {
+            const QJsonObject object = value.toObject();
+            name = object.value(QStringLiteral("name")).toString();
+            if (name.isEmpty()) {
+                name = object.value(QStringLiteral("target")).toString();
+            }
+            if (name.isEmpty()) {
+                name = object.value(QStringLiteral("id")).toString();
+            }
+            if (name.isEmpty()) {
+                name = object.value(QStringLiteral("label")).toString();
+            }
+            description = object.value(QStringLiteral("description")).toString();
+            if (description.isEmpty()) {
+                description = object.value(QStringLiteral("display_name")).toString();
+            }
+        }
+
+        if (name.isEmpty()) {
+            continue;
+        }
+
+        auto *item = new QListWidgetItem(description.isEmpty()
+                                             ? name
+                                             : QString("%1  -  %2").arg(name, description));
+        item->setData(Qt::UserRole, name);
+        m_armActionList->addItem(item);
+    }
+
+    if (m_armActionList->count() == 0) {
+        const QString messageText = message.value(QStringLiteral("message")).toString();
+        auto *emptyItem = new QListWidgetItem(messageText.isEmpty()
+                                                 ? QStringLiteral("下位机未返回可用固定位姿")
+                                                 : messageText);
+        emptyItem->setFlags(Qt::NoItemFlags);
+        m_armActionList->addItem(emptyItem);
+        m_executeArmActionButton->setEnabled(false);
+        addError(messageText.isEmpty()
+                     ? QStringLiteral("[机械臂] 固定位姿列表为空")
+                     : QString("[机械臂] %1").arg(messageText));
+        return;
+    }
+
+    m_armActionList->setCurrentRow(0);
+    addCommand(QString("[机械臂] 已更新固定位姿列表: %1 个").arg(m_armActionList->count()));
 }
 
 void MainWindow::setupKeyboardController()
 {
     m_keyboardController = new KeyboardController(this);
-    connect(m_keyboardController, &KeyboardController::velocityChanged,
-            this, [this](float lx, float ly, float az) {
-        // 时间节流：500ms内最多打一次日志
-        static float lastLx = 0.0f, lastAz = 0.0f;
+    connect(m_keyboardController, &KeyboardController::operatorInputChanged,
+            this, [this](const QStringList &pressedKeys) {
         static qint64 lastLogTime = 0;
-        bool changed = (lx != lastLx || az != lastAz);
+        const bool changed = (pressedKeys != m_keyboardPressedKeys);
+        m_keyboardPressedKeys = pressedKeys;
+
         if (changed) {
-            lastLx = lx;
-            lastAz = az;
             qint64 now = QDateTime::currentMSecsSinceEpoch();
             if (now - lastLogTime >= 500) {
                 lastLogTime = now;
-                bool isStopped = (lx == 0.0f && az == 0.0f);
-                if (!isStopped) {
-                    QString dir;
-                    if (lx > 0) dir += "前进 ";
-                    if (lx < 0) dir += "后退 ";
-                    if (az > 0) dir += "左转 ";
-                    if (az < 0) dir += "右转 ";
-                    addCommand(QString("[键盘] %1 (lx=%.2f az=%.2f)").arg(dir.trimmed()).arg(lx).arg(az));
+                if (!pressedKeys.isEmpty()) {
+                    addCommand(QString("[键盘] 按下: %1").arg(pressedKeys.join(",")));
                 } else {
                     addCommand("[键盘] 停止");
                 }
             }
         }
 
-        if (m_controller && m_controller->isTcpConnected()) {
-            m_controller->sendVelocityCommand(lx, ly, az);
-        }
+        sendOperatorInputSnapshot();
     });
     connect(m_keyboardController, &KeyboardController::emergencyStopRequested,
-            this, &MainWindow::on_btn_emergency_stop_clicked);
-
-    // 键盘机械臂模式信号
-    connect(m_keyboardController, &KeyboardController::jointControlRequested,
-            this, [this](int jointId, float position, float velocity) {
-        if (m_controller && m_controller->isTcpConnected()) {
-            m_controller->sendJointControl(jointId, position, velocity);
-            addCommand(QString("[键盘-机械臂] 关节%1 位置:%2 速度:%3")
-                       .arg(jointId).arg(position, 0, 'f', 3).arg(velocity, 0, 'f', 3));
-        }
-    });
-    connect(m_keyboardController, &KeyboardController::executorControlRequested,
-            this, [this](float value) {
-        if (m_controller && m_controller->isTcpConnected()) {
-            QJsonObject params;
-            params["value"] = value;
-            m_controller->sendSystemCommand("executor_control", params);
-            addCommand(QString("[键盘-机械臂] 执行器: %1").arg(value > 0 ? "张开" : "闭合"));
-        }
+            this, [this]() {
+        triggerEmergencyStop(QStringLiteral("keyboard_space"));
     });
 
     // 默认启用键盘控制
     m_keyboardController->setEnabled(true);
 
-    // 同步当前控制模式
-    m_keyboardController->setControlMode(static_cast<int>(m_controlMode));
 }
 
 void MainWindow::setupHandleKey()
@@ -252,22 +524,18 @@ void MainWindow::setupHandleKey()
             this, &MainWindow::onGamepadStateReceived);
     connect(m_handleKey, &HandleKey::connectionChanged,
             this, [this](bool connected) {
+        m_gamepadConnected = connected;
+        if (!connected) {
+            m_latestGamepadState = {};
+            m_gamepadStickEmergencyHeld = false;
+        }
         updateGamepadDisplay();
         if (connected) {
             addCommand("[手柄] 手柄已连接");
-            // 手柄连接后禁用键盘控制（急停除外）
-            if (m_keyboardController) {
-                m_keyboardController->setEnabled(false);
-                addCommand("[键盘] 键盘控制已禁用（急停仍可用）");
-            }
         } else {
             addCommand("[手柄] 手柄已断开");
-            // 手柄断开后恢复键盘控制
-            if (m_keyboardController) {
-                m_keyboardController->setEnabled(true);
-                addCommand("[键盘] 键盘控制已恢复");
-            }
         }
+        sendOperatorInputSnapshot();
     });
 }
 
@@ -280,7 +548,7 @@ void MainWindow::setupTimers()
 
 void MainWindow::setupConnections()
 {
-    // 按钮连接已在UI文件中自动处理，这里可以添加额外的连接
+    // 按钮连接已在UI文件和组件初始化中处理，这里保留给跨区域连接扩展。
 }
 
 void MainWindow::setupStatusBar()
@@ -315,7 +583,11 @@ void MainWindow::updateHeartbeatStatus(bool online)
 void MainWindow::updateFPS(int fps)
 {
     m_currentFPS = fps;
-    ui->label_fps_value->setText(QString("%1 FPS").arg(fps));
+    const QString fpsText = QString("%1 FPS").arg(fps);
+    ui->label_fps_value->setText(fpsText);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setFps(fps);
+    }
 }
 
 void MainWindow::updateBandwidthAndPacketLoss()
@@ -323,6 +595,9 @@ void MainWindow::updateBandwidthAndPacketLoss()
     if (!m_controller || !m_controller->isTcpConnected()) {
         ui->label_cpu->setText("带宽压力:");
         ui->label_cpu_value->setText("N/A");
+        if (m_telemetryPanel) {
+            m_telemetryPanel->setBandwidthText("N/A");
+        }
         return;
     }
 
@@ -361,13 +636,32 @@ void MainWindow::updateBandwidthAndPacketLoss()
     if (deltaSent > 0 && deltaSent > deltaReceived) {
         lossRate = (double)(deltaSent - deltaReceived) / deltaSent * 100.0;
     }
-    ui->label_cpu_value->setText(QString("%1 | 丢包: %2%").arg(pressure).arg(lossRate, 0, 'f', 1));
+    const QString heartbeatRtt = stats.lastHeartbeatRttMs >= 0
+                                     ? QString("%1ms").arg(stats.lastHeartbeatRttMs)
+                                     : QStringLiteral("N/A");
+    const QString bandwidthText = QString("%1 | 丢包: %2% | ACK: %3/%4 | RTT: %5 | 协议错: %6")
+                                      .arg(pressure)
+                                      .arg(lossRate, 0, 'f', 1)
+                                      .arg(stats.ackPendingCount)
+                                      .arg(stats.ackTimeoutCount)
+                                      .arg(heartbeatRtt)
+                                      .arg(stats.protocolErrorCount);
+    ui->label_cpu_value->setText(bandwidthText);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setBandwidthText(bandwidthText);
+    }
 }
 
 void MainWindow::updateMotorMode(const QString& mode)
 {
     m_motorMode = mode;
     ui->label_mode_value->setText(mode);
+    if (m_controlPanel) {
+        m_controlPanel->setModeText(mode);
+    }
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setModeText(mode);
+    }
     addCommand(QString("[系统] 电机模式切换: %1").arg(mode));
 }
 
@@ -381,6 +675,12 @@ void MainWindow::addError(const QString& error)
     m_errorCount++;
     formatAndAddError(error);
     ui->label_error_count->setText(QString("错误: %1").arg(m_errorCount));
+    if (m_statusErrorLabel) {
+        m_statusErrorLabel->setText(QString("错误: %1").arg(m_errorCount));
+    }
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setErrorCount(m_errorCount);
+    }
 }
 
 void MainWindow::updateCarAttitude(double roll, double pitch, double yaw)
@@ -389,24 +689,22 @@ void MainWindow::updateCarAttitude(double roll, double pitch, double yaw)
     m_pitch = pitch;
     m_yaw = yaw;
 
-    if (m_robotViewModel)
-        m_robotViewModel->updateAttitude(roll, pitch, yaw);
+    if (m_robotAttitudeWidget) {
+        m_robotAttitudeWidget->updateAttitude(roll, pitch, yaw);
+    }
 }
 
 void MainWindow::updateJointsData(const Communication::MotorState& motorState)
 {
     // 更新3D视图腿部角度（关节0-3对应4条腿，位置值直接作为角度度数）
-    if (m_robotViewModel) {
-        m_robotViewModel->updateLegs(
+    if (m_robotAttitudeWidget) {
+        m_robotAttitudeWidget->updateLegs(
             motorState.joints[0].position / 10.0,
             motorState.joints[1].position / 10.0,
             motorState.joints[2].position / 10.0,
             motorState.joints[3].position / 10.0
         );
     }
-
-    // 清空text_errors控件
-    ui->text_errors->clear();
 
     // 添加时间戳
     QString timestamp = getCurrentTimestamp();
@@ -432,34 +730,13 @@ void MainWindow::updateJointsData(const Communication::MotorState& motorState)
     jointsData += QString("执行器标志: 0x%1\n").arg(motorState.executor_flags, 2, 16, QChar('0'));
     jointsData += QString("保留字段: %1\n").arg(motorState.reserved);
 
-    // 设置文本内容
-    ui->text_errors->setText(header + jointsData);
-
-    // 在命令区域添加格式化的关节数据
-    addCommand("[关节数据] 数据已更新到显示区域");
-
-    // 格式化显示6个关节的位置数据（用于命令区域）
-    QString positionData = QString("[关节数据] 位置: ");
-    for (int i = 0; i < 6; ++i) {
-        positionData += QString("J%1:%2 ").arg(i+1).arg(motorState.joints[i].position / 1000.0f, 0, 'f', 3);
+    if (m_textData) {
+        m_textData->setText(header + jointsData);
+        QTextCursor cursor = m_textData->textCursor();
+        cursor.movePosition(QTextCursor::End);
+        m_textData->setTextCursor(cursor);
+        m_textData->ensureCursorVisible();
     }
-    addCommand(positionData);
-
-    // 格式化显示6个关节的电流数据（用于命令区域）
-    QString currentData = QString("[电流数据] 电流: ");
-    for (int i = 0; i < 6; ++i) {
-        currentData += QString("J%1:%2A ").arg(i+1).arg(motorState.joints[i].current / 1000.0f, 0, 'f', 3);
-    }
-    addCommand(currentData);
-
-    // 可选：滚动到底部
-    QTextCursor cursor = ui->text_errors->textCursor();
-    cursor.movePosition(QTextCursor::End);
-    ui->text_errors->setTextCursor(cursor);
-    ui->text_errors->ensureCursorVisible();
-
-    // 同时在命令区域显示接收消息
-    addCommand("[数据] 已接收并显示6关节数据");
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -473,7 +750,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {
     if (!event->isAutoRepeat() && event->key() == Qt::Key_Space) {
-        triggerEmergencyStop();
+        triggerEmergencyStop(QStringLiteral("keyboard_space"));
         event->accept();
         return;
     }
@@ -529,9 +806,8 @@ void MainWindow::on_action_reset_layout_triggered()
     m_roll = 0.0;
     m_pitch = 0.0;
     m_yaw = 0.0;
-    if (m_robotViewModel) {
-        m_robotViewModel->updateAttitude(0.0, 0.0, 0.0);
-        m_robotViewModel->updateLegs(0.0, 0.0, 0.0, 0.0);
+    if (m_robotAttitudeWidget) {
+        m_robotAttitudeWidget->resetView();
     }
 
     // 刷新所有UI显示（基于当前实际状态）
@@ -541,8 +817,16 @@ void MainWindow::on_action_reset_layout_triggered()
     updateBandwidthAndPacketLoss();
 
     ui->label_fps_value->setText(QString::number(m_currentFPS) + " FPS");
-    ui->label_mode_value->setText(m_controlMode == ControlMode::Vehicle ? "车体运动" : "机械臂操控");
+    ui->label_mode_value->setText(displayNameForControlMode(m_controlMode));
     ui->label_error_count->setText(QString("错误: %1").arg(m_errorCount));
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setFps(m_currentFPS);
+        m_telemetryPanel->setModeText(displayNameForControlMode(m_controlMode));
+        m_telemetryPanel->setErrorCount(m_errorCount);
+    }
+    if (m_controlPanel) {
+        m_controlPanel->setModeText(displayNameForControlMode(m_controlMode));
+    }
 
     update();
 
@@ -605,44 +889,84 @@ void MainWindow::on_btn_clear_errors_clicked()
     ui->text_errors->clear();
     m_errorCount = 0;
     ui->label_error_count->setText("错误: 0");
+    if (m_statusErrorLabel) {
+        m_statusErrorLabel->setText("错误: 0");
+    }
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setErrorCount(0);
+    }
     addCommand("[系统] 错误记录已清空");
 }
 
 void MainWindow::on_btn_emergency_stop_clicked()
 {
-    const bool restoreKeyboardControl = m_keyboardController && m_keyboardController->isEnabled();
+    triggerEmergencyStop(QStringLiteral("button"));
+}
+
+void MainWindow::on_btn_clear_emergency_clicked()
+{
+    addCommand("[急停] 请求解除急停");
+
+    clearOperatorInputSnapshot();
+    if (m_keyboardController) {
+        m_keyboardController->clearPressedKeys();
+    }
+
+    if (m_controller && m_controller->isTcpConnected()) {
+        if (m_controller->sendSystemCommand(QStringLiteral("clear_emergency"))) {
+            addCommand("[急停] 解除急停指令已发送，等待ACK");
+        } else {
+            addError("[急停] 解除急停指令发送失败");
+        }
+    } else {
+        addError("[急停] TCP未连接，无法解除下位机急停状态");
+    }
+
+    statusBar()->showMessage("已请求解除急停", 3000);
+}
+
+void MainWindow::clearOperatorInputSnapshot()
+{
+    m_keyboardPressedKeys.clear();
+    m_latestGamepadState = {};
+}
+
+void MainWindow::triggerEmergencyStop(const QString &source)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastEmergencyStopMs < 150) {
+        return;
+    }
+
+    m_lastEmergencyStopMs = now;
+
     // === 最高优先级急停处理 ===
-    addCommand("[急停] ⚠️ 用户触发急停按钮!");
+    addCommand(QString("[急停] 用户触发急停 source=%1").arg(source));
 
     // 1. 立即停止所有运动（TCP通道）
     if (m_controller && m_controller->isTcpConnected()) {
-        m_controller->sendEmergencyStop();
-        m_controller->sendVelocityCommand(0.0f, 0.0f, 0.0f);
-        addCommand("[急停] TCP急停指令已发送");
+        if (m_controller->sendEmergencyStop(source)) {
+            addCommand("[急停] TCP急停指令已发送，等待ACK");
+        } else {
+            addError("[急停] TCP急停指令发送失败");
+        }
+    } else {
+        addError("[急停] TCP未连接，急停未下发到下位机");
     }
 
-    // 2. 清空键盘控制器状态
+    // 2. 清空输入快照，确保急停后不会继续发送旧输入意图
+    clearOperatorInputSnapshot();
     if (m_keyboardController) {
-        m_keyboardController->setEnabled(false);
-        m_keyboardController->setEnabled(true);  // 重置状态
+        m_keyboardController->clearPressedKeys();
         addCommand("[急停] 键盘控制器已重置");
     }
 
-    // 3. 切换回车体模式（安全模式）
-    if (m_keyboardController && !restoreKeyboardControl) {
-        m_keyboardController->setEnabled(false);
-        addCommand("[Emergency Stop] Keyboard control kept disabled");
-    }
+    sendOperatorInputSnapshot();
 
-    if (m_controlMode != ControlMode::Vehicle) {
-        switchControlMode(ControlMode::Vehicle);
-        addCommand("[急停] 已切换回车体模式");
-    }
-
-    // 4. 状态栏提示
+    // 3. 状态栏提示
     statusBar()->showMessage("⚠️ 急停已触发！所有运动已停止", 5000);
 
-    // 5. 视觉反馈：按钮闪烁效果
+    // 4. 视觉反馈：按钮闪烁效果
     QPushButton* btn = ui->btn_emergency_stop;
     QString originalStyle = btn->styleSheet();
     btn->setStyleSheet("QPushButton { background-color: #FFFF00; color: black; border: 3px solid #FF0000; }");
@@ -693,6 +1017,9 @@ void MainWindow::updateConnectionDisplay()
 
     ui->label_connection_value->setText(statusText);
     ui->label_connection_value->setStyleSheet(styleSheet);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setConnectionStatus(m_isConnected);
+    }
 }
 
 void MainWindow::updateHeartbeatDisplay()
@@ -704,19 +1031,35 @@ void MainWindow::updateHeartbeatDisplay()
 
     ui->label_heartbeat_value->setText(statusText);
     ui->label_heartbeat_value->setStyleSheet(styleSheet);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setHeartbeatStatus(m_heartbeatOnline);
+    }
 }
 
 void MainWindow::updateGamepadDisplay()
 {
     bool connected = m_handleKey && m_handleKey->isConnected();
-    QString statusText = connected ? "已连接" : "未连接";
-    QString styleSheet = connected ?
-        "color: green; font-weight: bold;" :
-        "color: red; font-weight: bold;";
+    if (m_controlPanel) {
+        m_controlPanel->setGamepadConnected(connected);
+    }
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setGamepadConnected(connected);
+    }
+}
 
-    ui->label_gamepad_value->setText(statusText);
-    ui->label_gamepad_value->setStyleSheet(styleSheet);
-    ui->btn_gamepad_connect->setText(connected ? "断开手柄" : "连接手柄");
+void MainWindow::sendOperatorInputSnapshot()
+{
+    if (!m_controller || !m_controller->isTcpConnected()) {
+        return;
+    }
+
+    Communication::OperatorInputState inputState;
+    inputState.mode = modeNameForProtocol(m_controlMode);
+    inputState.ttlMs = 300;
+    inputState.keyboard.pressedKeys = m_keyboardPressedKeys;
+    inputState.gamepad = makeGamepadInputState(m_latestGamepadState, m_gamepadConnected);
+
+    m_controller->sendOperatorInput(inputState);
 }
 
 void MainWindow::formatAndAddCommand(const QString& command)
@@ -773,17 +1116,18 @@ QString MainWindow::getCurrentTimestamp() const
     return QDateTime::currentDateTime().toString("hh:mm:ss");
 }
 
-void MainWindow::triggerEmergencyStop()
+void MainWindow::applyControlMode(ControlMode mode)
 {
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - m_lastEmergencyStopMs < 150) {
-        return;
+    m_controlMode = mode;
+    const QString modeText = displayNameForControlMode(mode);
+    ui->label_mode_value->setText(modeText);
+    if (m_controlPanel) {
+        m_controlPanel->setModeText(modeText);
     }
-
-    m_lastEmergencyStopMs = now;
-    on_btn_emergency_stop_clicked();
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setModeText(modeText);
+    }
 }
-
 
 void MainWindow::showTcpConnectionDialog()
 {
@@ -1109,6 +1453,8 @@ void MainWindow::onTcpConnected()
 {
     updateConnectionStatus(true);
     addCommand("[TCP] 已连接到ROS节点");
+    sendOperatorInputSnapshot();
+    refreshArmNamedTargets();
     if (m_controller) {
         statusBar()->showMessage(QString("TCP已连接: %1:%2")
             .arg(m_controller->getROSHost()).arg(m_controller->getROSPort()));
@@ -1138,10 +1484,17 @@ void MainWindow::onMotorStateReceived(const Communication::MotorState &state)
     updateJointsData(state);
 }
 
+void MainWindow::onJointRuntimeStatesReceived(const Communication::JointRuntimeStateList &states)
+{
+    if (m_motorRuntimeWidget) {
+        m_motorRuntimeWidget->setRuntimeStates(states);
+    }
+}
+
 void MainWindow::onCO2DataReceived(float ppm)
 {
-    if (m_co2Widget) {
-        m_co2Widget->setCO2Value(ppm);
+    if (m_telemetryPanel) {
+        m_telemetryPanel->setCO2Value(ppm);
     }
 }
 
@@ -1158,17 +1511,209 @@ void MainWindow::onCameraInfoReceived(int cameraId, bool online, const QString &
                                       int width, int height, int fps, int bitrate,
                                       const QString &rtspUrl)
 {
-    if (cameraId >= 0 && cameraId < 5 && m_rtspWidgets[cameraId]) {
-        m_rtspWidgets[cameraId]->setCameraInfo(rtspUrl, online, codec, width, height, fps, bitrate);
+    if (m_cameraGridWidget) {
+        m_cameraGridWidget->setCameraInfo(cameraId, rtspUrl, online, codec, width, height, fps, bitrate);
         addCommand(QString("[TCP] 摄像头%1 %2 %3")
                    .arg(cameraId).arg(online ? "上线" : "离线").arg(rtspUrl));
     }
 }
 
+void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
+{
+    const QString type = message["type"].toString();
+
+    if (type == "ack_pending") {
+        addCommand(QString("[ACK] waiting %1 seq=%2 timeout=%3ms")
+                   .arg(message["ack_type"].toString("unknown"))
+                   .arg(message["seq"].toVariant().toLongLong())
+                   .arg(message["timeout_ms"].toInt()));
+        return;
+    }
+
+    if (type == "ack") {
+        const QString ackType = message["ack_type"].toString("unknown");
+        const qint64 seq = message["seq"].toVariant().toLongLong();
+        const bool ok = message["ok"].toBool(false);
+        const int code = message["code"].toInt(-1);
+        const QString text = message["message"].toString();
+        const QString line = QString("[ACK] %1 seq=%2 %3 code=%4 elapsed=%5ms %6")
+                                 .arg(ackType)
+                                 .arg(seq)
+                                 .arg(ok ? "OK" : "FAIL")
+                                 .arg(code)
+                                 .arg(message["elapsed_ms"].toVariant().toLongLong())
+                                 .arg(text);
+        if (ok) {
+            addCommand(line);
+        } else {
+            addError(line);
+        }
+        return;
+    }
+
+    if (type == "ack_timeout" || type == "ack_disconnected") {
+        addError(QString("[ACK] %1 %2 seq=%3 elapsed=%4ms")
+                 .arg(type == "ack_timeout" ? "TIMEOUT" : "DISCONNECTED")
+                 .arg(message["ack_type"].toString("unknown"))
+                 .arg(message["seq"].toVariant().toLongLong())
+                 .arg(message["elapsed_ms"].toVariant().toLongLong()));
+        return;
+    }
+
+    if (type == "ack_unmatched") {
+        addError(QString("[ACK] UNMATCHED %1 seq=%2 code=%3 %4")
+                 .arg(message["ack_type"].toString("unknown"))
+                 .arg(message["seq"].toVariant().toLongLong())
+                 .arg(message["code"].toInt(-1))
+                 .arg(message["message"].toString()));
+        return;
+    }
+
+    if (type == "ack_mismatch") {
+        addError(QString("[ACK] MISMATCH actual=%1 expected=%2 seq=%3 elapsed=%4ms code=%5 %6")
+                 .arg(message["ack_type"].toString("unknown"))
+                 .arg(message["expected_ack_type"].toString("unknown"))
+                 .arg(message["seq"].toVariant().toLongLong())
+                 .arg(message["elapsed_ms"].toVariant().toLongLong())
+                 .arg(message["code"].toInt(-1))
+                 .arg(message["message"].toString()));
+        return;
+    }
+
+    if (type == "service_call_result") {
+        const bool ok = message["ok"].toBool(false);
+        const QString line = QString("[ROS service] %1 %2 seq=%3 code=%4 %5ms %6")
+                                 .arg(message["command"].toString("unknown"))
+                                 .arg(ok ? "OK" : "FAIL")
+                                 .arg(message["seq"].toVariant().toLongLong())
+                                 .arg(message["code"].toInt(-1))
+                                 .arg(message["duration_ms"].toVariant().toLongLong())
+                                 .arg(message["message"].toString());
+        const QString detail = QString("%1 service=%2 request=%3")
+                                   .arg(line)
+                                   .arg(message["service"].toString("unknown"))
+                                   .arg(message["request_type"].toString("unknown"));
+        if (ok) {
+            addCommand(detail);
+        } else {
+            addError(detail);
+        }
+        return;
+    }
+
+    if (type == "emergency_state") {
+        const bool active = message["active"].toBool(false);
+        const QString source = message["source"].toString();
+        const QString text = message["message"].toString();
+        const QString line = QString("[急停状态] %1 source=%2 %3")
+                                 .arg(active ? "ACTIVE" : "CLEAR")
+                                 .arg(source)
+                                 .arg(text);
+        addCommand(line);
+        return;
+    }
+
+    if (type == "hello") {
+        addCommand(QString("[Bridge] hello name=%1 version=%2 robot=%3")
+                   .arg(message["bridge_name"].toString("unknown"))
+                   .arg(message["bridge_version"].toString("unknown"))
+                   .arg(message["robot_id"].toString("unknown")));
+        return;
+    }
+
+    if (type == "capabilities") {
+        addCommand(QString("[Bridge] capabilities supports=%1 max_frame=%2")
+                   .arg(message["supports"].toArray().size())
+                   .arg(message["max_frame_bytes"].toVariant().toLongLong()));
+        return;
+    }
+
+    if (type == "arm_named_targets"
+        || type == "moveit_named_targets"
+        || type == "moveit_named_poses"
+        || type == "arm_action_list") {
+        updateArmNamedTargets(message);
+        return;
+    }
+
+    if (type == "sync_request_sent") {
+        addCommand(QString("[同步] request reason=%1 sync=%2 cameras=%3")
+                   .arg(message["reason"].toString("unknown"))
+                   .arg(message["sync_sent"].toBool(false) ? "sent" : "failed")
+                   .arg(message["camera_list_sent"].toBool(false) ? "sent" : "failed"));
+        return;
+    }
+
+    if (type == "system_snapshot") {
+        const QJsonObject emergency = message["emergency"].toObject();
+        const QJsonObject motor = message["motor"].toObject();
+        const QJsonObject lastError = message["last_error"].toObject();
+        ControlMode snapshotMode = m_controlMode;
+        if (parseControlMode(message["control_mode"].toString(), &snapshotMode)) {
+            applyControlMode(snapshotMode);
+        }
+        addCommand(QString("[同步] system_snapshot seq=%1 mode=%2 emergency=%3 motor=%4/%5 last_error=%6:%7")
+                   .arg(message["seq"].toVariant().toLongLong())
+                   .arg(message["control_mode"].toString("unknown"))
+                   .arg(emergency["active"].toBool(false) ? "active" : "clear")
+                   .arg(motor["initialized"].toBool(false) ? "init" : "not_init")
+                   .arg(motor["enabled"].toBool(false) ? "enabled" : "disabled")
+                   .arg(lastError["code"].toInt(0))
+                   .arg(lastError["message"].toString()));
+        return;
+    }
+
+    if (type == "camera_list_response") {
+        addCommand(QString("[同步] camera_list_response seq=%1 cameras=%2")
+                   .arg(message["seq"].toVariant().toLongLong())
+                   .arg(message["cameras"].toArray().size()));
+        return;
+    }
+
+    if (type == "param_response") {
+        addCommand(QString("[参数] %1=%2")
+                   .arg(message["name"].toString("unknown"))
+                   .arg(message["value"].toVariant().toString()));
+        return;
+    }
+
+    if (type == "protocol_error") {
+        addError(QString("[协议错误] seq=%1 code=%2 %3")
+                 .arg(message["seq"].toVariant().toLongLong())
+                 .arg(message["code"].toInt(-1))
+                 .arg(message["message"].toString()));
+        return;
+    }
+
+    if (type == "system_status") {
+        ControlMode statusMode = m_controlMode;
+        if (parseControlMode(message["control_mode"].toString(), &statusMode)) {
+            applyControlMode(statusMode);
+        }
+        if (message.contains("targets")
+            || message.contains("named_targets")
+            || message.contains("poses")
+            || message.contains("actions")
+            || message.contains("positions")
+            || message.contains("arm_named_targets")
+            || message.contains("moveit_named_targets")) {
+            updateArmNamedTargets(message);
+        }
+        if (message.contains("last_operator_input_seq")) {
+            return;
+        }
+        addCommand(QString("[状态] system_status seq=%1")
+                   .arg(message["seq"].toVariant().toLongLong()));
+    }
+}
+
 void MainWindow::onGamepadStateReceived(const ControllerState &state)
 {
+    m_latestGamepadState = state;
+    m_gamepadConnected = true;
+
     // === 1. 更新 GamepadDisplayWidget 显示 ===
-    if (m_gamepadWidget) {
+    if (m_controlPanel) {
         // 摇杆归一化到 -1.0 ~ 1.0
         float lx = state.sThumbLX / 32767.0f;
         float ly = state.sThumbLY / 32767.0f;
@@ -1177,211 +1722,34 @@ void MainWindow::onGamepadStateReceived(const ControllerState &state)
         float lt = state.bLeftTrigger / 255.0f;
         float rt = state.bRightTrigger / 255.0f;
 
-        m_gamepadWidget->updateAll(lx, ly, rx, ry, lt, rt);
+        m_controlPanel->updateGamepadAxes(lx, ly, rx, ry, lt, rt);
 
         // 按钮状态显示
-        if (state.buttonA) m_gamepadWidget->updateButton("A", true);
-        else if (state.buttonB) m_gamepadWidget->updateButton("B", true);
-        else if (state.buttonX) m_gamepadWidget->updateButton("X", true);
-        else if (state.buttonY) m_gamepadWidget->updateButton("Y", true);
-        else if (state.leftShoulder) m_gamepadWidget->updateButton("LB", true);
-        else if (state.rightShoulder) m_gamepadWidget->updateButton("RB", true);
-        else if (state.buttonBack) m_gamepadWidget->updateButton("Back", true);
-        else if (state.buttonStart) m_gamepadWidget->updateButton("Start", true);
-        else if (state.dpadUp) m_gamepadWidget->updateButton("DPad↑", true);
-        else if (state.dpadDown) m_gamepadWidget->updateButton("DPad↓", true);
-        else if (state.dpadLeft) m_gamepadWidget->updateButton("DPad←", true);
-        else if (state.dpadRight) m_gamepadWidget->updateButton("DPad→", true);
-        else m_gamepadWidget->updateButton("--", false);
+        if (state.buttonA) m_controlPanel->updateGamepadButton("A", true);
+        else if (state.buttonB) m_controlPanel->updateGamepadButton("B", true);
+        else if (state.buttonX) m_controlPanel->updateGamepadButton("X", true);
+        else if (state.buttonY) m_controlPanel->updateGamepadButton("Y", true);
+        else if (state.leftShoulder) m_controlPanel->updateGamepadButton("LB", true);
+        else if (state.rightShoulder) m_controlPanel->updateGamepadButton("RB", true);
+        else if (state.buttonBack) m_controlPanel->updateGamepadButton("Back", true);
+        else if (state.buttonStart) m_controlPanel->updateGamepadButton("Start", true);
+        else if (state.dpadUp) m_controlPanel->updateGamepadButton("DPad↑", true);
+        else if (state.dpadDown) m_controlPanel->updateGamepadButton("DPad↓", true);
+        else if (state.dpadLeft) m_controlPanel->updateGamepadButton("DPad←", true);
+        else if (state.dpadRight) m_controlPanel->updateGamepadButton("DPad→", true);
+        else m_controlPanel->updateGamepadButton("--", false);
     }
 
-    // === 2. D-Pad检测模式切换 ===
-    if (state.dpadUp) {
-        switchControlMode(ControlMode::Vehicle);
+    const bool stickEmergencyPressed = state.leftThumb && state.rightThumb;
+    if (stickEmergencyPressed && !m_gamepadStickEmergencyHeld) {
+        m_gamepadStickEmergencyHeld = true;
+        addCommand("[手柄] L3+R3 急停!");
+        triggerEmergencyStop(QStringLiteral("gamepad_l3_r3"));
         return;
     }
-    if (state.dpadDown) {
-        switchControlMode(ControlMode::Arm);
-        return;
+    if (!stickEmergencyPressed) {
+        m_gamepadStickEmergencyHeld = false;
     }
 
-    // === 3. 根据当前模式分发控制逻辑 ===
-    if (m_controlMode == ControlMode::Arm) {
-        handleGamepadArmMode(state);
-    } else {
-        handleGamepadVehicleMode(state);
-    }
-}
-
-void MainWindow::switchControlMode(ControlMode mode)
-{
-    if (m_controlMode == mode) return;
-    m_controlMode = mode;
-
-    QString modeName = (mode == ControlMode::Vehicle) ? "车体运动" : "机械臂操控";
-    ui->label_mode_value->setText(modeName);
-    addCommand(QString("[模式切换] %1").arg(modeName));
-
-    // 同步通知键盘控制器
-    if (m_keyboardController) {
-        m_keyboardController->setControlMode(static_cast<int>(mode));
-    }
-
-    // 切换到机械臂模式时，发送零速度确保车体停止
-    if (mode == ControlMode::Arm) {
-        if (m_controller && m_controller->isTcpConnected()) {
-            m_controller->sendVelocityCommand(0.0f, 0.0f, 0.0f);
-        }
-    }
-}
-
-void MainWindow::handleGamepadVehicleMode(const ControllerState &state)
-{
-    // 左摇杆Y轴 → 前后线速度 (linearX)
-    // 右摇杆X轴 → 左右角速度 (angularZ)
-    const int16_t DEADZONE = 3000;
-    const float MAX_LINEAR_SPEED = 0.5f;
-    const float MAX_ANGULAR_SPEED = 1.0f;
-
-    float linearX = 0.0f;
-    float angularZ = 0.0f;
-
-    if (qAbs(state.sThumbLY) > DEADZONE) {
-        linearX = (state.sThumbLY / 32767.0f) * MAX_LINEAR_SPEED;
-    }
-    if (qAbs(state.sThumbRX) > DEADZONE) {
-        angularZ = -(state.sThumbRX / 32767.0f) * MAX_ANGULAR_SPEED;
-    }
-
-    // A按钮 → 急停
-    if (state.buttonA) {
-        linearX = 0.0f;
-        angularZ = 0.0f;
-        if (m_controller && m_controller->isTcpConnected()) {
-            m_controller->sendEmergencyStop();
-        }
-        addCommand("[手柄] 急停!");
-        return;
-    }
-
-    // 发送速度命令
-    if (m_controller && m_controller->isTcpConnected()) {
-        m_controller->sendVelocityCommand(linearX, 0.0f, angularZ);
-    }
-
-    // 方向变化日志（500ms节流防止刷屏）
-    static float lastLx = 0.0f, lastAz = 0.0f;
-    static qint64 lastLogTime = 0;
-    bool changed = (qAbs(linearX - lastLx) > 0.01f || qAbs(angularZ - lastAz) > 0.01f);
-    if (changed) {
-        lastLx = linearX;
-        lastAz = angularZ;
-        qint64 now = QDateTime::currentMSecsSinceEpoch();
-        if (now - lastLogTime >= 500) {
-            lastLogTime = now;
-            bool isStopped = (linearX == 0.0f && angularZ == 0.0f);
-            if (!isStopped) {
-                QString dir;
-                if (linearX > 0) dir += "前进 ";
-                if (linearX < 0) dir += "后退 ";
-                if (angularZ > 0) dir += "左转 ";
-                if (angularZ < 0) dir += "右转 ";
-                addCommand(QString("[手柄-车体] %1 (lx=%.2f az=%.2f)")
-                           .arg(dir.trimmed()).arg(linearX).arg(angularZ));
-            }
-        }
-    }
-}
-
-void MainWindow::handleGamepadArmMode(const ControllerState &state)
-{
-    const int16_t DEADZONE = 3000;
-    const float POSITION_SPEED = 0.01f;  // 位置增量 m
-    const float ROTATION_SPEED = 0.05f;  // 姿态增量 rad
-
-    // A按钮 → 急停
-    if (state.buttonA) {
-        if (m_controller && m_controller->isTcpConnected()) {
-            m_controller->sendEmergencyStop();
-        }
-        addCommand("[手柄-机械臂] 急停!");
-        return;
-    }
-
-    // 末端笛卡尔空间控制
-    float deltaX = 0.0f;  // 前后
-    float deltaY = 0.0f;  // 左右
-    float deltaZ = 0.0f;  // 上下
-    float deltaRoll = 0.0f;
-    float deltaPitch = 0.0f;
-    float deltaYaw = 0.0f;
-
-    // 左摇杆X → 末端左右移动 (Y轴)
-    if (qAbs(state.sThumbLX) > DEADZONE) {
-        deltaY = (state.sThumbLX / 32767.0f) * POSITION_SPEED;
-    }
-
-    // 左摇杆Y → 末端前后移动 (X轴)
-    if (qAbs(state.sThumbLY) > DEADZONE) {
-        deltaX = (state.sThumbLY / 32767.0f) * POSITION_SPEED;
-    }
-
-    // 右摇杆Y → 末端上下移动 (Z轴)
-    if (qAbs(state.sThumbRY) > DEADZONE) {
-        deltaZ = (state.sThumbRY / 32767.0f) * POSITION_SPEED;
-    }
-
-    // 右摇杆X → 末端偏航 (Yaw)
-    if (qAbs(state.sThumbRX) > DEADZONE) {
-        deltaYaw = (state.sThumbRX / 32767.0f) * ROTATION_SPEED;
-    }
-
-    // LT → 末端俯仰- (Pitch-)
-    if (state.bLeftTrigger > 30) {
-        deltaPitch = -(state.bLeftTrigger / 255.0f) * ROTATION_SPEED;
-    }
-
-    // RT → 末端俯仰+ (Pitch+)
-    if (state.bRightTrigger > 30) {
-        deltaPitch = (state.bRightTrigger / 255.0f) * ROTATION_SPEED;
-    }
-
-    // LB → 末端滚转- (Roll-)
-    if (state.leftShoulder) {
-        deltaRoll = -ROTATION_SPEED;
-    }
-
-    // RB → 末端滚转+ (Roll+)
-    if (state.rightShoulder) {
-        deltaRoll = ROTATION_SPEED;
-    }
-
-    // 发送末端控制命令
-    bool hasMovement = (qAbs(deltaX) > 0.001f || qAbs(deltaY) > 0.001f || qAbs(deltaZ) > 0.001f ||
-                        qAbs(deltaRoll) > 0.001f || qAbs(deltaPitch) > 0.001f || qAbs(deltaYaw) > 0.001f);
-
-    if (hasMovement) {
-        if (m_controller && m_controller->isTcpConnected()) {
-            m_controller->sendEndEffectorControl(deltaX, deltaY, deltaZ, deltaRoll, deltaPitch, deltaYaw);
-        }
-
-        // 日志（500ms节流防止刷屏）
-        static float lastX = 0.0f, lastY = 0.0f, lastZ = 0.0f;
-        static float lastRoll = 0.0f, lastPitch = 0.0f, lastYaw = 0.0f;
-        static qint64 lastLogTime = 0;
-        bool changed = (qAbs(deltaX - lastX) > 0.001f || qAbs(deltaY - lastY) > 0.001f ||
-                        qAbs(deltaZ - lastZ) > 0.001f || qAbs(deltaRoll - lastRoll) > 0.001f ||
-                        qAbs(deltaPitch - lastPitch) > 0.001f || qAbs(deltaYaw - lastYaw) > 0.001f);
-        if (changed) {
-            lastX = deltaX; lastY = deltaY; lastZ = deltaZ;
-            lastRoll = deltaRoll; lastPitch = deltaPitch; lastYaw = deltaYaw;
-            qint64 now = QDateTime::currentMSecsSinceEpoch();
-            if (now - lastLogTime >= 500) {
-                lastLogTime = now;
-                addCommand(QString("[手柄-末端] XYZ:(%.3f,%.3f,%.3f) RPY:(%.3f,%.3f,%.3f)")
-                           .arg(deltaX).arg(deltaY).arg(deltaZ)
-                           .arg(deltaRoll).arg(deltaPitch).arg(deltaYaw));
-            }
-        }
-    }
+    sendOperatorInputSnapshot();
 }

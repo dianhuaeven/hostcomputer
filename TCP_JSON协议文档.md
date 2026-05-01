@@ -4,6 +4,15 @@
 传输方式：TCP 长连接，每条 JSON 消息以 `\n` 结尾
 数据编码：UTF-8
 
+> 当前上位机发送协议以 `docs/开发归档/通信与视频链路改造计划.md` 中的协议 v1 为准。旧版 `cmd_vel` JSON 帧已经废弃；上位机只发送 `operator_input` 输入快照，下位机 bridge 自行解析并发布 ROS `/cmd_vel` 或其他内部控制指令。
+
+## 通用帧约束
+
+- 每条 JSON 帧以 `\n` 结尾。
+- 单帧最大长度：`1048576` 字节。
+- v1 帧应包含 `protocol_version: 1`、`seq`、`timestamp_ms`。
+- 上位机接收侧会对关键帧做基础 schema 校验；坏 JSON、超大帧、缺关键字段会生成 `protocol_error`。
+
 ---
 
 ## 一、上位机 → 下位机（发送）
@@ -65,26 +74,62 @@
 
 ---
 
-### 3. cmd_vel — 速度控制命令
+### 3. operator_input — 操作者输入快照
 
-控制机器人整体运动速度（键盘控制时发送）。
+承载键盘与手柄当前输入状态。该帧不逐条 ACK，靠 `seq`、`ttl_ms` 和下位机 watchdog 保证高频输入安全。
 
 ```json
 {
-  "type": "cmd_vel",
-  "linear_x": 0.5,
-  "linear_y": 0.0,
-  "angular_z": 0.3,
-  "timestamp": 1709971200000
+  "type": "operator_input",
+  "protocol_version": 1,
+  "seq": 12345,
+  "timestamp_ms": 1709971200000,
+  "ttl_ms": 300,
+  "mode": "vehicle",
+  "keyboard": {
+    "pressed_keys": ["w", "d", "shift"]
+  },
+  "gamepad": {
+    "connected": true,
+    "buttons": {
+      "a": false,
+      "b": false,
+      "x": false,
+      "y": false,
+      "start": false,
+      "back": false,
+      "lb": false,
+      "rb": false,
+      "l3": false,
+      "r3": false,
+      "dpad_up": false,
+      "dpad_down": false,
+      "dpad_left": false,
+      "dpad_right": false
+    },
+    "axes": {
+      "left_x": 0.0,
+      "left_y": 0.82,
+      "right_x": -0.31,
+      "right_y": 0.0,
+      "lt": 0.0,
+      "rt": 0.5
+    }
+  }
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| linear_x | float | 线速度X（前进/后退） |
-| linear_y | float | 线速度Y（左移/右移） |
-| angular_z | float | 角速度Z（左转/右转） |
-| timestamp | int64 | 毫秒级时间戳 |
+| protocol_version | int | 协议版本，当前为 1 |
+| seq | int64 | 上位机单调递增序号 |
+| timestamp_ms | int64 | 毫秒级时间戳 |
+| ttl_ms | int | 输入快照有效期 |
+| mode | string | `vehicle` / `arm` |
+| keyboard.pressed_keys | array[string] | 当前按下集合，未出现的键视为未按下 |
+| gamepad.connected | bool | 手柄是否在线 |
+| gamepad.buttons | object | 手柄按钮完整快照，摇杆按下使用 `l3` / `r3` |
+| gamepad.axes | object | 摇杆范围 `[-1.0, 1.0]`，扳机范围 `[0.0, 1.0]` |
 
 ---
 
@@ -95,28 +140,54 @@
 ```json
 {
   "type": "emergency_stop",
-  "timestamp": 1709971200000
+  "protocol_version": 1,
+  "seq": 2001,
+  "timestamp_ms": 1709971200000,
+  "params": {
+    "source": "button"
+  }
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| timestamp | int64 | 毫秒级时间戳 |
+| protocol_version | int | 协议版本，当前为 1 |
+| seq | int64 | 上位机单调递增序号 |
+| timestamp_ms | int64 | 毫秒级时间戳 |
+| params.source | string | 触发来源，例如 `button`、`keyboard_space`、`gamepad_l3_r3` |
 
 ---
 
 ### 5. system_command — 系统命令
 
-通用系统命令，可携带任意参数。
+通用系统命令，可携带任意参数。当前 UI 直接使用它触发生命周期服务和控制域切换。
 
 ```json
 {
   "type": "system_command",
-  "command": "reset",
+  "protocol_version": 1,
+  "seq": 42,
+  "command": "enable",
+  "params": {},
+  "timestamp_ms": 1709971200000
+}
+```
+
+生命周期命令映射到 `Eyou_ROS1_Master` 的 Trigger 服务：
+`init`、`enable`、`disable`、`halt`、`resume`、`recover`、`shutdown`。
+
+控制域只表示上位机输入转发所处的业务域，不表示底层关节控制模式：
+
+```json
+{
+  "type": "system_command",
+  "protocol_version": 1,
+  "seq": 43,
+  "command": "set_control_mode",
   "params": {
-    "mode": "soft"
+    "mode": "arm"
   },
-  "timestamp": 1709971200000
+  "timestamp_ms": 1709971200000
 }
 ```
 
@@ -124,7 +195,8 @@
 |------|------|------|
 | command | string | 命令名称 |
 | params | object | 命令参数（任意键值对） |
-| timestamp | int64 | 毫秒级时间戳 |
+| params.mode | string | `set_control_mode` 使用，取值 `vehicle` / `arm` |
+| timestamp_ms | int64 | 毫秒级时间戳 |
 
 ---
 
@@ -135,17 +207,219 @@
 ```json
 {
   "type": "heartbeat",
-  "timestamp": 1709971200000
+  "protocol_version": 1,
+  "seq": 3000,
+  "timestamp_ms": 1709971200000
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| timestamp | int64 | 毫秒级时间戳 |
+| protocol_version | int | 协议版本，当前为 1 |
+| seq | int64 | 上位机单调递增序号 |
+| timestamp_ms | int64 | 毫秒级时间戳 |
+
+下位机应返回：
+
+```json
+{
+  "type": "heartbeat_ack",
+  "protocol_version": 1,
+  "seq": 3000,
+  "timestamp_ms": 1709971200100,
+  "server_time_ms": 1709971200100
+}
+```
+
+---
+
+### 7. ack — 关键命令确认
+
+关键离散命令必须返回 ACK。上位机会在发送后登记 pending，超时、断线、迟到 ACK 都会进入 UI 日志。
+
+```json
+{
+  "type": "ack",
+  "protocol_version": 1,
+  "ack_type": "emergency_stop",
+  "seq": 2001,
+  "ok": true,
+  "code": 0,
+  "message": "emergency active",
+  "timestamp_ms": 1709971200100
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| ack_type | string | 被确认的命令类型 |
+| seq | int64 | 对应原命令的 `seq` |
+| ok | bool | 是否成功 |
+| code | int | 0 成功，非 0 为错误码 |
+| message | string | 人类可读信息 |
+
+mock server 可用环境变量模拟 ACK 行为：
+
+- `MOCK_ACK_MODE=ok`：默认成功 ACK。
+- `MOCK_ACK_MODE=fail`：返回失败 ACK。
+- `MOCK_ACK_MODE=drop`：不返回 ACK，用于测试超时。
+- `MOCK_ACK_DELAY_SEC=3`：延迟 ACK，用于测试迟到 ACK 或超时。
+
+---
+
+### 7.1 service_call_result — ROS service 调用结果
+
+当下位机为了执行关键命令调用 ROS service 时，应额外回传一次简略结果。它不替代 `ack`：`ack` 仍用于命令链路确认，`service_call_result` 用于展示真实 service 执行结果。
+
+```json
+{
+  "type": "service_call_result",
+  "protocol_version": 1,
+  "seq": 2002,
+  "timestamp_ms": 1709971200100,
+  "request_type": "system_command",
+  "command": "enable",
+  "service": "/hybrid_motor_hw_node/enable",
+  "ok": true,
+  "code": 0,
+  "message": "enabled",
+  "duration_ms": 18
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| seq | int64 | 对应原 TCP 命令的 `seq` |
+| request_type | string | 原 TCP 消息类型，例如 `system_command` / `emergency_stop` |
+| command | string | 触发的命令名，例如 `enable` / `set_control_mode` |
+| service | string | ROS service 名称 |
+| ok | bool | service 调用是否成功 |
+| code | int | 0 成功，非 0 为错误码 |
+| message | string | 简略结果说明 |
+| duration_ms | int | service 调用耗时，毫秒 |
+
+当前 `ros1_bridge` 已对生命周期命令 `init` / `enable` / `disable` / `halt` / `resume` / `recover` / `shutdown` 回传该消息。
+`emergency_stop`、`set_control_mode` 等其它命令如果也需要调用 ROS service，可在启动桥接节点时显式配置：
+
+```bash
+python3 ros1_bridge/host_bridge_node.py --ros \
+  --service-command emergency_stop=/safety/emergency_stop \
+  --service-command set_control_mode=/control/set_{mode}_mode
+```
+
+`--service-command` 目前按 `std_srvs/Trigger` 调用，服务名模板支持 `{command}`、`{mode}`、`{source}` 占位。
+
+---
+
+### 8. sync_request — 状态同步请求
+
+上位机连接或重连后自动发送，请求下位机返回当前系统快照。
+
+```json
+{
+  "type": "sync_request",
+  "protocol_version": 1,
+  "seq": 3010,
+  "timestamp_ms": 1709971200000,
+  "params": {
+    "reason": "connected"
+  }
+}
+```
+
+### 9. camera_list_request — 摄像头列表请求
+
+上位机连接或重连后自动发送，请求下位机返回全部摄像头状态。
+
+```json
+{
+  "type": "camera_list_request",
+  "protocol_version": 1,
+  "seq": 3020,
+  "timestamp_ms": 1709971200000
+}
+```
 
 ---
 
 ## 二、下位机 → 上位机（接收）
+
+### 0. hello / capabilities — bridge 握手
+
+下位机 bridge 建立连接后可以主动发送 `hello` 和 `capabilities`，用于说明 bridge 身份和支持的协议能力。
+
+```json
+{
+  "type": "hello",
+  "protocol_version": 1,
+  "seq": 0,
+  "timestamp_ms": 1709971200000,
+  "bridge_name": "host_bridge_node",
+  "bridge_version": "1.0.0",
+  "robot_id": "robot_001"
+}
+```
+
+```json
+{
+  "type": "capabilities",
+  "protocol_version": 1,
+  "seq": 0,
+  "timestamp_ms": 1709971200000,
+  "supports": [
+    "operator_input",
+    "heartbeat_ack",
+    "critical_ack",
+    "sync_request",
+    "camera_list_request",
+    "joint_runtime_states",
+    "hybrid_lifecycle_services"
+  ],
+  "max_frame_bytes": 1048576
+}
+```
+
+### 0.1 system_snapshot / camera_list_response — 同步响应
+
+```json
+{
+  "type": "system_snapshot",
+  "protocol_version": 1,
+  "seq": 3010,
+  "timestamp_ms": 1709971200100,
+  "control_mode": "vehicle",
+  "emergency": { "active": false, "source": "" },
+  "motor": { "initialized": true, "enabled": true },
+  "modules": {
+    "base": "online",
+    "arm": "online",
+    "camera": "degraded"
+  },
+  "last_error": { "code": 0, "message": "" }
+}
+```
+
+```json
+{
+  "type": "camera_list_response",
+  "protocol_version": 1,
+  "seq": 3020,
+  "timestamp_ms": 1709971200100,
+  "cameras": [
+    {
+      "camera_id": 0,
+      "name": "front",
+      "online": true,
+      "rtsp_url": "rtsp://192.168.1.50:8554/front",
+      "codec": "h264",
+      "width": 1280,
+      "height": 720,
+      "fps": 25,
+      "bitrate_kbps": 2500
+    }
+  ]
+}
+```
 
 ### 1. motor_state — 电机状态数据
 
@@ -178,6 +452,41 @@
 | executor_torque | float | 执行器扭矩 |
 | executor_flags | int | 执行器标志位 |
 | reserved | int | 保留字段 |
+
+---
+
+### 1.1 joint_runtime_states — 关节生命周期状态
+
+下位机转发 `Eyou_ROS1_Master/JointRuntimeStateArray`，用于上位机显示电机生命状态。
+
+```json
+{
+  "type": "joint_runtime_states",
+  "protocol_version": 1,
+  "seq": 0,
+  "timestamp_ms": 1709971200000,
+  "states": [
+    {
+      "joint_name": "left_front_arm_joint",
+      "backend": "canopen",
+      "lifecycle_state": "Running",
+      "online": true,
+      "enabled": true,
+      "fault": false
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| states | array | 关节运行态列表 |
+| states[].joint_name | string | 关节名 |
+| states[].backend | string | 后端，例如 `canopen` / `can_driver` |
+| states[].lifecycle_state | string | 统一生命周期状态 |
+| states[].online | bool | 当前反馈是否在线/新鲜 |
+| states[].enabled | bool | 关节是否使能 |
+| states[].fault | bool | 是否处于故障状态 |
 
 ---
 
