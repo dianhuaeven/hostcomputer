@@ -42,7 +42,7 @@ ninja
 │  Controller (src/controller/)                    │ ← 业务逻辑层
 │  + UI控件: RtspPlayerWidget, CO2DisplayWidget,   │
 │    GamepadDisplayWidget, DisplayLayoutManager    │
-│  + 输入: KeyboardController, HandleKey(XInput)   │
+│  + 输入: KeyboardController, HandleKey(SDL3)     │
 ├─────────────────────────────────────────────────┤
 │  Communication (src/communication/)              │ ← 通信层：仅TCP/JSON
 │  ROS1TcpClient + SharedStructs                   │
@@ -56,7 +56,7 @@ ninja
 
 ### 层级规则
 - **Communication层**：只负责TCP连接和原始JSON收发，不含业务逻辑。通过signal将数据向上传递
-- **Controller层**：协调通信层，提供统一业务接口（`sendVelocityCommand`, `sendJointControl`等）给UI层。也包含自定义UI控件
+- **Controller层**：协调通信层，提供统一业务接口（`sendOperatorInput`, `sendJointControl`, `sendEmergencyStop` 等）给UI层。也包含自定义UI控件
 - **Utils层**：Logger日志和ErrorHandler，被所有层依赖
 - **UI层**（根目录）：MainWindow组装所有组件，处理键盘/手柄事件分发
 
@@ -74,9 +74,9 @@ ninja
 
 ### 控制 (src/controller/)
 - **`Controller`**：业务逻辑核心，封装所有与下位机交互的命令接口
-- **`KeyboardController`**：键盘按键 → 速度命令映射（车体/机械臂双模式）
-- **`HandleKey`**：XInput手柄驱动，轮询手柄状态并发出`ControllerState`信号
-- **`RtspPlayerWidget`**：基于`QMediaPlayer`的RTSP视频播放控件，5路并发
+- **`KeyboardController`**：采集键盘输入并输出协议层按键名（车体/机械臂双模式）
+- **`HandleKey`**：SDL3 Gamepad手柄驱动，Windows下保留XInput fallback，轮询手柄状态并发出`ControllerState`信号
+- **`RtspPlayerWidget`**：基于 FFmpeg 子进程低缓冲拉流的 RTSP 视频播放控件，5 路并发
 - **`DisplayLayoutManager`**：管理2×3视频网格布局
 - **`RobotViewModel`**：QML与C++桥接，暴露Roll/Pitch/Yaw属性给3D姿态视图
 
@@ -87,7 +87,9 @@ ninja
 ## 技术栈
 
 - Qt 6.8.3 (MinGW 64-bit), C++20, CMake 3.16+
-- Qt模块：Core, Widgets, Network, Multimedia, MultimediaWidgets, Quick, QuickWidgets
+- Qt模块：Core, Widgets, Network, Quick, QuickWidgets
+- 运行时工具：FFmpeg 可执行文件用于 RTSP 低延迟播放和下位机推流
+- 开发机 FFmpeg 安装说明见 `docs/开发归档/FFmpeg开发环境安装指南.md`
 - Windows XInput（手柄支持）
 - QML用于3D机器人姿态渲染（`resources/qml/RobotView.qml`）
 
@@ -96,7 +98,7 @@ ninja
 ### TCP JSON协议 (Port 9090)
 
 接收：`motor_state`（关节位置/电流）、`co2_data`、`imu_data`、`camera_info`（含RTSP URL）
-发送：`motor_command`、`velocity_command`、`joint_control`、`emergency_stop`、`end_effector`
+发送：`operator_input`（高频键盘/手柄输入快照，不逐条 ACK）、`emergency_stop` / `system_command`（关键命令，必须 ACK），以及保留的低频机械臂/电机控制帧。
 
 摄像头信息推送触发RTSP自动播放：`camera_id` 0-4对应2×3网格前5格，`online: true`时启动播放。
 

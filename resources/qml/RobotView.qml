@@ -1,12 +1,10 @@
 import QtQuick
 import QtQuick3D
-import QtQuick.Controls
 
 Item {
     id: root
 
-    // 由C++ rootContext注入的 robotViewModel
-    property var viewModel: typeof robotViewModel !== "undefined" ? robotViewModel : null
+    property var viewModel: null
 
     function clampAngle(angle) {
         angle = angle % 360

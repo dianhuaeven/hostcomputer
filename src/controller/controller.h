@@ -7,6 +7,7 @@
 #include <QByteArray>
 #include <QJsonObject>
 #include <memory>
+#include "HostProtocol.h"
 #include "SharedStructs.h"
 
 namespace Communication {
@@ -42,12 +43,14 @@ public:
 
     // 命令发送接口
     bool sendMotorCommand(const Communication::MotorState &state);
+    bool sendOperatorInput(const Communication::OperatorInputState &inputState);
     bool sendControlCommand(const Communication::Command &command);
-    bool sendVelocityCommand(float linearX, float linearY, float angularZ);
     bool sendJointControl(int jointId, float position, float velocity);
-    bool sendEmergencyStop();
+    bool sendEmergencyStop(const QString &source);
     bool sendSystemCommand(const QString &command, const QJsonObject &params = QJsonObject());
     bool sendEndEffectorControl(float x, float y, float z, float roll, float pitch, float yaw);
+    bool requestBridgeSync(const QString &reason);
+    bool requestCameraList();
 
     // TCP连接管理（供UI层对话框使用）
     bool connectToROS(const QString &host, quint16 port);
@@ -63,6 +66,13 @@ public:
         quint64 bytesReceived;
         quint64 connectionCount;
         quint64 reconnectCount;
+        quint64 ackPendingCount;
+        quint64 ackReceivedCount;
+        quint64 ackTimeoutCount;
+        quint64 protocolErrorCount;
+        quint64 heartbeatTimeoutCount;
+        qint64 lastHeartbeatRttMs;
+        qint64 lastHeartbeatAckMs;
     };
     Statistics getTcpStatistics() const;
 
@@ -75,12 +85,14 @@ signals:
 
     // 数据接收信号
     void motorStateReceived(const Communication::MotorState &state);
+    void jointRuntimeStatesReceived(const Communication::JointRuntimeStateList &states);
     void co2DataReceived(float ppm);
     void imuDataReceived(float roll, float pitch, float yaw,
                          float accelX, float accelY, float accelZ);
     void cameraInfoReceived(int cameraId, bool online, const QString &codec,
                            int width, int height, int fps, int bitrate,
                            const QString &rtspUrl);
+    void protocolMessageReceived(const QJsonObject &message);
 
     // 系统状态信号
     void systemError(const QString &error);
@@ -92,11 +104,13 @@ private slots:
     void onTcpDisconnected();
     void onTcpError(const QString &error);
     void onTcpMotorStateReceived(const Communication::MotorState &state);
+    void onTcpJointRuntimeStatesReceived(const Communication::JointRuntimeStateList &states);
     void onTcpCO2DataReceived(float ppm);
     void onTcpIMUDataReceived(float roll, float pitch, float yaw,
                               float accelX, float accelY, float accelZ);
     void onTcpCameraInfoReceived(int cameraId, const QString &rtspUrl, bool online,
                                  const QString &codec, int width, int height, int fps, int bitrate);
+    void onTcpSystemStatusReceived(const QJsonObject &status);
 
 private:
     // 内部辅助方法

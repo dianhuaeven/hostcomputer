@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <array>
+#include <QString>
+#include <QVector>
 
 namespace Communication {
 
@@ -10,8 +12,8 @@ namespace Communication {
  * @brief 单个关节状态信息
  */
 struct JointState {
-    int16_t position;      // 关节位置
-    int16_t current;       // 关节电流
+    int16_t position = 0;  // 关节位置
+    int16_t current = 0;   // 关节电流
 };
 
 /**
@@ -20,12 +22,23 @@ struct JointState {
 struct MotorState {
     static constexpr size_t kJointCount = 6;      // 6个关节
 
-    std::array<JointState, kJointCount> joints;   // 关节状态数组
-    int16_t executor_position;                    // 执行器位置
-    int16_t executor_torque;                      // 执行器扭矩
-    uint8_t executor_flags;                       // 执行器标志位
-    uint8_t reserved;                            // 保留字节
+    std::array<JointState, kJointCount> joints{}; // 关节状态数组
+    int16_t executor_position = 0;                // 执行器位置
+    int16_t executor_torque = 0;                  // 执行器扭矩
+    uint8_t executor_flags = 0;                   // 执行器标志位
+    uint8_t reserved = 0;                         // 保留字节
 };
+
+struct JointRuntimeState {
+    QString jointName;
+    QString backend;
+    QString lifecycleState;
+    bool online = false;
+    bool enabled = false;
+    bool fault = false;
+};
+
+using JointRuntimeStateList = QVector<JointRuntimeState>;
 
 /**
  * @brief PC发送给下位机的控制命令 (通过TCP JSON发送)

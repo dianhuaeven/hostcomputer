@@ -2,6 +2,8 @@
 
 本文档面向下位机开发者（Intel NUC / Ubuntu 20.04 + ROS1），说明如何编写 ROS 节点与上位机 TCP 通信。
 
+> 当前协议已升级到 host bridge protocol v1。上位机不再发送 `cmd_vel` JSON 帧，而是发送 `operator_input` 输入快照；下位机 `host_bridge_node` 负责根据模式、映射表和安全策略解析输入，再发布 ROS `/cmd_vel` 或机械臂控制话题。
+
 ---
 
 ## 一、通信概述
@@ -44,7 +46,7 @@
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │ 发布 ROS Topic（来自上位机）          JSON type         │ │
 │  │─────────────────────────────────────────────────────────│ │
-│  │ /cmd_vel          (geometry_msgs/Twist)  cmd_vel       │ │
+│  │ /operator_input   (自定义)            operator_input   │ │
 │  │ /emergency_stop   (std_msgs/Bool)        emergency_stop│ │
 │  │ /joint_command    (自定义)               joint_control │ │
 │  │ /cartesian_command(自定义)            cartesian_control│ │
@@ -73,7 +75,7 @@
 
 | ROS Topic | 消息类型 | JSON type | 说明 | 必须 |
 |-----------|---------|-----------|------|------|
-| `/cmd_vel` | `geometry_msgs/Twist` | `cmd_vel` | 底盘速度控制 | ✅ |
+| `/operator_input` | 自定义 | `operator_input` | 键盘/手柄输入快照，由 bridge 解析为 `/cmd_vel` 或机械臂控制 | ✅ |
 | `/emergency_stop` | `std_msgs/Bool` | `emergency_stop` | 急停，优先级最高 | ✅ |
 | `/joint_command` | 自定义 | `joint_control` | 单关节位置控制 | ✅ |
 | `/cartesian_command` | 自定义 | `cartesian_control` | 末端笛卡尔控制 | ✅ |
@@ -193,23 +195,33 @@
 
 ## 四、下位机需要接收的消息（Client → Server）
 
-### 4.1 cmd_vel — 速度控制
+### 4.1 operator_input — 操作者输入快照
 
-上位机通过键盘/手柄发送底盘速度指令，建议转发到 `/cmd_vel` Topic。
+上位机通过键盘/手柄发送输入快照，不直接发送速度语义。下位机应根据当前模式、输入映射、安全状态和 watchdog 解析为 `/cmd_vel`、机械臂控制或其他内部指令。
 
 ```json
-{"type":"cmd_vel","linear_x":0.5,"linear_y":0.0,"angular_z":0.3,"timestamp":1709971200000}\n
+{"type":"operator_input","protocol_version":1,"seq":12345,"timestamp_ms":1709971200000,"ttl_ms":300,"mode":"vehicle","keyboard":{"pressed_keys":["w","d"]},"gamepad":{"connected":true,"buttons":{"a":false,"b":false,"x":false,"y":false,"start":false,"back":false,"lb":false,"rb":false,"l3":false,"r3":false,"dpad_up":false,"dpad_down":false,"dpad_left":false,"dpad_right":false},"axes":{"left_x":0.0,"left_y":0.82,"right_x":-0.31,"right_y":0.0,"lt":0.0,"rt":0.5}}}\n
 ```
 
-**ROS 转发示例**：
+**ROS 解析示例**：
 ```python
 from geometry_msgs.msg import Twist
 
-def handle_cmd_vel(data):
+def handle_operator_input(data):
+    if is_expired(data['timestamp_ms'], data.get('ttl_ms', 300)):
+        publish_stop()
+        return
+
+    keys = set(data.get('keyboard', {}).get('pressed_keys', []))
+    gamepad = data.get('gamepad', {})
+
     msg = Twist()
-    msg.linear.x = data['linear_x']
-    msg.linear.y = data['linear_y']
-    msg.angular.z = data['angular_z']
+    # 这里的映射表属于下位机，不属于 Qt 上位机。
+    if 'w' in keys:
+        msg.linear.x += vehicle_params.max_linear_speed
+    if 's' in keys:
+        msg.linear.x -= vehicle_params.max_linear_speed
+    msg.angular.z += gamepad.get('axes', {}).get('right_x', 0.0) * vehicle_params.max_angular_speed
     cmd_vel_pub.publish(msg)
 ```
 
@@ -439,12 +451,8 @@ def handle_message(data):
     """处理上位机发来的 JSON 消息"""
     msg_type = data.get('type', '')
 
-    if msg_type == 'cmd_vel':
-        twist = Twist()
-        twist.linear.x = data.get('linear_x', 0.0)
-        twist.linear.y = data.get('linear_y', 0.0)
-        twist.angular.z = data.get('angular_z', 0.0)
-        cmd_vel_pub.publish(twist)
+    if msg_type == 'operator_input':
+        handle_operator_input(data)
 
     elif msg_type == 'emergency_stop':
         rospy.logwarn("EMERGENCY STOP received!")
