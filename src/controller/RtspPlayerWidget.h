@@ -7,6 +7,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QTimer>
+#include <QMenu>
 
 class FfmpegRtspDecoder;
 class VideoFrameWidget;
@@ -35,6 +36,7 @@ private slots:
     void onDecoderStarted();
     void onDecoderStopped();
     void onDecoderFailed(const QString &message);
+    void showContextMenu(const QPoint &pos);
 
 private:
     int m_cameraId;
@@ -55,6 +57,7 @@ private:
     QPushButton *m_stopBtn;
     QTimer *m_clockTimer;        // 刷新本地时钟的定时器
     QTimer *m_frameTimer;        // 从解码线程取最新帧的定时器
+    bool m_fisheyeEnabled = false;
 };
 
 #endif // RTSPPLAYERWIDGET_H

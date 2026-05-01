@@ -3,6 +3,7 @@
 #include "FfmpegRtspDecoder.h"
 #include "VideoFrameWidget.h"
 
+#include <QAction>
 #include <QTime>
 
 RtspPlayerWidget::RtspPlayerWidget(int cameraId, QWidget *parent)
@@ -99,6 +100,11 @@ RtspPlayerWidget::RtspPlayerWidget(int cameraId, QWidget *parent)
             this, &RtspPlayerWidget::onDecoderStopped);
     connect(m_decoder, &FfmpegRtspDecoder::failed,
             this, &RtspPlayerWidget::onDecoderFailed);
+
+    // 右键菜单
+    setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(this, &QWidget::customContextMenuRequested,
+            this, &RtspPlayerWidget::showContextMenu);
 }
 
 RtspPlayerWidget::~RtspPlayerWidget()
@@ -152,6 +158,7 @@ void RtspPlayerWidget::startVideo()
     }
 
     m_waitLabel->setText("连接视频...");
+    m_decoder->setFisheyeEnabled(m_fisheyeEnabled);
     m_decoder->start(m_rtspUrl, m_streamWidth, m_streamHeight, m_streamFps);
 
     m_waitLabel->hide();
@@ -243,5 +250,26 @@ void RtspPlayerWidget::updateLocalClock()
         int x = m_videoWidget->x() + m_videoWidget->width() - lw - 8;
         int y = m_videoWidget->y() + m_videoWidget->height() - lh - 8;
         m_localClockLabel->move(x, y);
+    }
+}
+
+void RtspPlayerWidget::showContextMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+
+    QAction *fisheyeAction = menu.addAction(QStringLiteral("鱼眼矫正"));
+    fisheyeAction->setCheckable(true);
+    fisheyeAction->setChecked(m_fisheyeEnabled);
+
+    QAction *chosen = menu.exec(mapToGlobal(pos));
+    if (chosen == fisheyeAction) {
+        m_fisheyeEnabled = fisheyeAction->isChecked();
+        m_decoder->setFisheyeEnabled(m_fisheyeEnabled);
+
+        // 如果正在播放，重启解码器以应用新滤镜
+        if (m_decoder->isRunning()) {
+            stopVideo();
+            startVideo();
+        }
     }
 }

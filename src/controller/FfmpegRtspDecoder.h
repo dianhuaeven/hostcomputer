@@ -20,6 +20,8 @@ public:
     ~FfmpegRtspDecoder() override;
 
     bool isRunning() const;
+    void setFisheyeEnabled(bool enabled);
+    bool fisheyeEnabled() const;
     void start(const QString &rtspUrl, int width, int height, int fps);
     void stop();
     bool takeLatestFrame(QImage *frame);
@@ -46,6 +48,7 @@ private:
     int m_height = 0;
     int m_fps = 0;
     int m_frameBytes = 0;
+    bool m_fisheyeEnabled = false;
 };
 
 #endif // FFMPEGRTSPDECODER_H

@@ -30,6 +30,16 @@ bool FfmpegRtspDecoder::isRunning() const
     return m_workerThread && m_workerThread->isRunning();
 }
 
+void FfmpegRtspDecoder::setFisheyeEnabled(bool enabled)
+{
+    m_fisheyeEnabled = enabled;
+}
+
+bool FfmpegRtspDecoder::fisheyeEnabled() const
+{
+    return m_fisheyeEnabled;
+}
+
 void FfmpegRtspDecoder::start(const QString &rtspUrl, int width, int height, int fps)
 {
     stop();
@@ -150,7 +160,9 @@ QStringList FfmpegRtspDecoder::ffmpegArguments(const QString &rtspUrl) const
         rtspUrl,
         QStringLiteral("-an"),
         QStringLiteral("-vf"),
-        QStringLiteral("scale=%1:%2").arg(m_width).arg(m_height),
+        m_fisheyeEnabled
+            ? QStringLiteral("v360=fisheye:flat:ih_fov=180:iv_fov=180:h_fov=120:v_fov=90,scale=%1:%2").arg(m_width).arg(m_height)
+            : QStringLiteral("scale=%1:%2").arg(m_width).arg(m_height),
         QStringLiteral("-f"),
         QStringLiteral("rawvideo"),
         QStringLiteral("-pix_fmt"),
