@@ -30,6 +30,7 @@
 #include <QThread>
 #include <QJsonArray>
 #include <QGroupBox>
+#include <QGridLayout>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QSizePolicy>
@@ -143,7 +144,6 @@ MainWindow::MainWindow(QWidget *parent)
     setupConnections();
     setupStatusBar();
 
-    
     // 初始化UI状态
     updateConnectionDisplay();
     updateHeartbeatDisplay();
@@ -271,12 +271,20 @@ void MainWindow::setupBottomActionPanel()
         return;
     }
 
-    auto *bottomSplit = new QSplitter(Qt::Horizontal, ui->widget_left_workspace);
+    auto *bottomContainer = new QWidget(ui->widget_left_workspace);
+    bottomContainer->setObjectName(QStringLiteral("widget_bottom_action_container"));
+    bottomContainer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    bottomContainer->setFixedHeight(220);
+
+    auto *bottomContainerLayout = new QVBoxLayout(bottomContainer);
+    bottomContainerLayout->setContentsMargins(0, 0, 0, 0);
+    bottomContainerLayout->setSpacing(0);
+
+    auto *bottomSplit = new QSplitter(Qt::Horizontal, bottomContainer);
     bottomSplit->setObjectName(QStringLiteral("splitter_bottom_logs_actions"));
     bottomSplit->setChildrenCollapsible(false);
     bottomSplit->setHandleWidth(6);
-    bottomSplit->setMinimumHeight(145);
-    bottomSplit->setMaximumHeight(185);
+    bottomSplit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     ui->verticalLayout_left_workspace->removeWidget(m_logTabs);
     m_logTabs->setMinimumHeight(0);
@@ -285,15 +293,15 @@ void MainWindow::setupBottomActionPanel()
 
     auto *actionPanel = new QWidget(bottomSplit);
     actionPanel->setObjectName(QStringLiteral("widget_bottom_action_panel"));
-    actionPanel->setMinimumWidth(300);
+    actionPanel->setMinimumWidth(640);
     actionPanel->setStyleSheet(
-        "QGroupBox { font-weight: 700; border: 1px solid #dbe3ef; border-radius: 6px; margin-top: 8px; }"
+        "QGroupBox { font-weight: 700; border: 1px solid #dbe3ef; border-radius: 6px; margin-top: 6px; }"
         "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #334155; }"
-        "QPushButton { min-height: 26px; padding: 2px 10px; }");
+        "QPushButton { min-height: 24px; padding: 1px 10px; }");
 
     auto *actionLayout = new QHBoxLayout(actionPanel);
     actionLayout->setContentsMargins(0, 0, 0, 0);
-    actionLayout->setSpacing(8);
+    actionLayout->setSpacing(6);
 
     auto *armGroup = new QGroupBox(QStringLiteral("机械臂 Action"), actionPanel);
     auto *armLayout = new QVBoxLayout(armGroup);
@@ -307,6 +315,7 @@ void MainWindow::setupBottomActionPanel()
     m_armActionList->item(0)->setFlags(Qt::NoItemFlags);
 
     auto *armButtonLayout = new QHBoxLayout();
+    armButtonLayout->setSpacing(4);
     m_refreshArmActionButton = new QPushButton(QStringLiteral("刷新位姿"), armGroup);
     m_executeArmActionButton = new QPushButton(QStringLiteral("运动到该位置"), armGroup);
     m_executeArmActionButton->setEnabled(false);
@@ -317,27 +326,36 @@ void MainWindow::setupBottomActionPanel()
     armLayout->addLayout(armButtonLayout);
 
     auto *monitorGroup = new QGroupBox(QStringLiteral("任务标志"), actionPanel);
-    monitorGroup->setMaximumWidth(118);
-    auto *monitorLayout = new QVBoxLayout(monitorGroup);
-    monitorLayout->setContentsMargins(8, 8, 8, 8);
-    monitorLayout->setSpacing(8);
+    monitorGroup->setMinimumWidth(332);
+    monitorGroup->setMaximumWidth(332);
+    auto *monitorLayout = new QGridLayout(monitorGroup);
+    monitorLayout->setContentsMargins(6, 4, 6, 4);
+    monitorLayout->setHorizontalSpacing(6);
+    monitorLayout->setVerticalSpacing(4);
 
     auto *thermalButton = new QPushButton(QStringLiteral("热源监测"), monitorGroup);
     auto *dynamicButton = new QPushButton(QStringLiteral("动态监测"), monitorGroup);
     auto *dangerButton = new QPushButton(QStringLiteral("危险标志"), monitorGroup);
-    monitorLayout->addWidget(thermalButton);
-    monitorLayout->addWidget(dynamicButton);
-    monitorLayout->addWidget(dangerButton);
-    monitorLayout->addStretch();
+    auto *qrCodeButton = new QPushButton(QStringLiteral("二维码检测"), monitorGroup);
+    auto *resetMonitorButton = new QPushButton(QStringLiteral("重置"), monitorGroup);
+    monitorLayout->addWidget(thermalButton, 0, 0);
+    monitorLayout->addWidget(dynamicButton, 0, 1);
+    monitorLayout->addWidget(dangerButton, 0, 2);
+    monitorLayout->addWidget(qrCodeButton, 1, 0);
+    monitorLayout->addWidget(resetMonitorButton, 1, 1);
+    monitorLayout->setColumnStretch(0, 1);
+    monitorLayout->setColumnStretch(1, 1);
+    monitorLayout->setColumnStretch(2, 1);
 
-    actionLayout->addWidget(armGroup, 1);
+    actionLayout->addWidget(armGroup, 3);
     actionLayout->addWidget(monitorGroup, 0);
 
     bottomSplit->addWidget(actionPanel);
-    bottomSplit->setStretchFactor(0, 3);
-    bottomSplit->setStretchFactor(1, 1);
-    bottomSplit->setSizes({900, 300});
-    ui->verticalLayout_left_workspace->addWidget(bottomSplit);
+    bottomSplit->setStretchFactor(0, 4);
+    bottomSplit->setStretchFactor(1, 2);
+    bottomSplit->setSizes({1040, 360});
+    bottomContainerLayout->addWidget(bottomSplit);
+    ui->verticalLayout_left_workspace->addWidget(bottomContainer);
 
     connect(m_refreshArmActionButton, &QPushButton::clicked,
             this, &MainWindow::refreshArmNamedTargets);
@@ -357,6 +375,12 @@ void MainWindow::setupBottomActionPanel()
     });
     connect(dangerButton, &QPushButton::clicked, this, [this]() {
         handleMonitorCommand(QStringLiteral("危险标志"), QStringLiteral("danger_sign"));
+    });
+    connect(qrCodeButton, &QPushButton::clicked, this, [this]() {
+        handleMonitorCommand(QStringLiteral("二维码检测"), QStringLiteral("qr_code_detect"));
+    });
+    connect(resetMonitorButton, &QPushButton::clicked, this, [this]() {
+        handleMonitorCommand(QStringLiteral("重置"), QStringLiteral("reset_monitor"));
     });
 }
 
@@ -1493,6 +1517,19 @@ void MainWindow::onJointRuntimeStatesReceived(const Communication::JointRuntimeS
 
 void MainWindow::onCO2DataReceived(float ppm)
 {
+    QString color = QStringLiteral("#15803d");
+    if (ppm >= 1500.0f) {
+        color = QStringLiteral("#b91c1c");
+    } else if (ppm >= 800.0f) {
+        color = QStringLiteral("#c2410c");
+    }
+
+    ui->label_co2_value->setText(QString("%1 ppm").arg(ppm, 0, 'f', 0));
+    ui->label_co2_value->setStyleSheet(
+        QString("color: white; background: %1; border: 1px solid %1; "
+                "border-radius: 10px; padding: 4px 12px; font-size: 15px; font-weight: 800;")
+            .arg(color));
+
     if (m_telemetryPanel) {
         m_telemetryPanel->setCO2Value(ppm);
     }
