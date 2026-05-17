@@ -136,6 +136,18 @@ QString FfmpegRtspDecoder::ffmpegProgram() const
 
 QStringList FfmpegRtspDecoder::ffmpegArguments(const QString &rtspUrl) const
 {
+    const QString lensK1 = qEnvironmentVariable(
+        "HOSTCOMPUTER_FISHEYE_K1", QStringLiteral("-0.5"));
+    const QString lensK2 = qEnvironmentVariable(
+        "HOSTCOMPUTER_FISHEYE_K2", QStringLiteral("0.0"));
+    const QString videoFilter = m_fisheyeEnabled
+        ? QStringLiteral(
+              "lenscorrection=cx=0.5:cy=0.5:k1=%1:k2=%2,scale=%3:%4")
+              .arg(lensK1, lensK2)
+              .arg(m_width)
+              .arg(m_height)
+        : QStringLiteral("scale=%1:%2").arg(m_width).arg(m_height);
+
     return {
         QStringLiteral("-hide_banner"),
         QStringLiteral("-loglevel"),
@@ -160,9 +172,7 @@ QStringList FfmpegRtspDecoder::ffmpegArguments(const QString &rtspUrl) const
         rtspUrl,
         QStringLiteral("-an"),
         QStringLiteral("-vf"),
-        m_fisheyeEnabled
-            ? QStringLiteral("v360=fisheye:flat:ih_fov=180:iv_fov=180:h_fov=120:v_fov=90,scale=%1:%2").arg(m_width).arg(m_height)
-            : QStringLiteral("scale=%1:%2").arg(m_width).arg(m_height),
+        videoFilter,
         QStringLiteral("-f"),
         QStringLiteral("rawvideo"),
         QStringLiteral("-pix_fmt"),

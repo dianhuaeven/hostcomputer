@@ -6,6 +6,18 @@
 #include <QAction>
 #include <QTime>
 
+namespace {
+
+QString overlayLabelTextForCamera(int cameraId)
+{
+    if (cameraId == 3) {
+        return QStringLiteral("前摄像头");
+    }
+    return QString();
+}
+
+} // namespace
+
 RtspPlayerWidget::RtspPlayerWidget(int cameraId, QWidget *parent)
     : QWidget(parent)
     , m_cameraId(cameraId)
@@ -36,7 +48,9 @@ RtspPlayerWidget::RtspPlayerWidget(int cameraId, QWidget *parent)
         "color: #00ff00; font-size: 18px; font-weight: bold; font-family: 'Consolas', 'Mono';"
         "background-color: rgba(0, 0, 0, 180); padding: 2px 6px; border-radius: 3px;");
     m_localClockLabel->setAlignment(Qt::AlignRight | Qt::AlignBottom);
-    m_localClockLabel->setText("LOCAL --:--:--.---");
+    const QString overlayText = overlayLabelTextForCamera(m_cameraId);
+    m_localClockLabel->setText(
+        overlayText.isEmpty() ? QStringLiteral("LOCAL --:--:--.---") : overlayText);
     m_localClockLabel->hide();
 
     // 时钟刷新定时器（10ms 刷新一次，精确到毫秒级）
@@ -225,9 +239,10 @@ void RtspPlayerWidget::onDecoderStopped()
 
 void RtspPlayerWidget::onDecoderFailed(const QString &message)
 {
+    Q_UNUSED(message)
     m_videoWidget->hide();
     m_waitLabel->show();
-    m_waitLabel->setText(message);
+    m_waitLabel->setText(QStringLiteral("视频暂不可用"));
     m_startBtn->setEnabled(m_streamOnline && !m_rtspUrl.isEmpty());
     m_stopBtn->setEnabled(false);
     m_statusLabel->setText("播放错误");
@@ -239,9 +254,14 @@ void RtspPlayerWidget::onDecoderFailed(const QString &message)
 
 void RtspPlayerWidget::updateLocalClock()
 {
-    // 显示本地时间精确到毫秒，和视频帧中的时间戳对比即可测出延迟
-    QTime now = QTime::currentTime();
-    m_localClockLabel->setText(QString("LOCAL %1").arg(now.toString("HH:mm:ss.zzz")));
+    const QString overlayText = overlayLabelTextForCamera(m_cameraId);
+    if (!overlayText.isEmpty()) {
+        m_localClockLabel->setText(overlayText);
+    } else {
+        // 显示本地时间精确到毫秒，和视频帧中的时间戳对比即可测出延迟
+        QTime now = QTime::currentTime();
+        m_localClockLabel->setText(QString("LOCAL %1").arg(now.toString("HH:mm:ss.zzz")));
+    }
 
     // 定位到视频区域右下角
     if (m_videoWidget->isVisible()) {
