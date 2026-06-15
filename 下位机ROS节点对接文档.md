@@ -73,15 +73,15 @@
 
 #### 需发布的 ROS Topic（上位机 → 下位机）
 
-| ROS Topic | 消息类型 | JSON type | 说明 | 必须 |
+| ROS Topic | 消息类型 | JSON type | 说明 | 状态 |
 |-----------|---------|-----------|------|------|
-| `/operator_input` | 自定义 | `operator_input` | 键盘/手柄输入快照，由 bridge 解析为 `/cmd_vel` 或机械臂控制 | ✅ |
-| `/emergency_stop` | `std_msgs/Bool` | `emergency_stop` | 急停，优先级最高 | ✅ |
-| `/joint_command` | 自定义 | `joint_control` | 单关节位置控制 | ✅ |
-| `/cartesian_command` | 自定义 | `cartesian_control` | 末端笛卡尔控制 | ✅ |
-| `/motor_command` | 自定义 | `motor_command` | 6关节+执行器批量控制 | ✅ |
-| `/control_command` | 自定义 | `control_command` | 综合控制（IMU+摆臂+机械臂末端） | ✅ |
-| `/system_command` | 自定义 | `system_command` | 系统命令（复位/模式切换等） | |
+| `/operator_input` | 自定义 | `operator_input` | 键盘/手柄输入快照，由 bridge 解析为 `/cmd_vel`/servo/flipper/gripper | ✅ 启用 |
+| `/emergency_stop` | `std_msgs/Bool` | `emergency_stop` | 急停，优先级最高 | ✅ 启用 |
+| `/joint_command` | 自定义 | `joint_control` | 单关节位置控制 | 🔶 保留（未启用） |
+| `/cartesian_command` | 自定义 | `cartesian_control` | 末端笛卡尔控制 | 🔶 保留（未启用） |
+| `/motor_command` | 自定义 | `motor_command` | 6关节+执行器批量控制 | 🔶 保留（未启用） |
+| `/control_command` | 自定义 | `control_command` | 综合控制（IMU+摆臂+机械臂末端） | 🔶 保留（未启用） |
+| `/system_command` | 自定义 | `system_command` | 系统命令（复位/模式切换等） | ✅ 启用 |
 
 ---
 
@@ -346,7 +346,9 @@ def handle_control_command(data):
 
 ---
 
-## 五、Python 参考实现
+## 五、Python 参考实现（教学示例，非生产代码）
+
+> ⚠️ 以下 `tcp_bridge.py` 是**最小可用教学示例**，仅演示 operator_input/emergency_stop/joint_control/cartesian_control/heartbeat 的处理，**不反映真实 bridge**。生产环境实际使用的是 `ros1_bridge/host_bridge_node.py`（host_bridge_node + video_manager_node 双节点架构，含 operator_input→cmd_vel/servo/flipper/gripper 解析、watchdog、joint_runtime_states 转发、video manager IPC 等）。本节示例的字段为简化格式，实际帧含 `protocol_version`/`seq`/`timestamp_ms`，完整格式以 `TCP_JSON协议文档.md` 为准。
 
 以下为最小可用的 ROS 节点 TCP Server 示例：
 

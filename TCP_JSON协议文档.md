@@ -17,7 +17,9 @@
 
 ## 一、上位机 → 下位机（发送）
 
-### 1. motor_command — 电机控制命令
+> 启用状态说明：当前 MainWindow 实际发送的帧为 `operator_input`、`emergency_stop`、`system_command`、`heartbeat`、`sync_request`、`camera_list_request`、`ack`。`motor_command`、`joint_control` 为**协议保留帧**（上位机已实现发送函数但 MainWindow 未启用），下方仍列出格式供参考。
+
+### 1. motor_command — 电机控制命令（保留，当前未启用）
 
 发送6关节+执行器的控制数据。
 
@@ -513,34 +515,22 @@ python3 ros1_bridge/host_bridge_node.py --ros \
 
 ---
 
-### 3. environment / co2 — 环境传感器数据
+### 3. co2_data — 环境传感器数据
 
-下位机上报CO2浓度数据。支持两种 `type` 值：`"environment"` 或 `"co2"`。
+下位机上报CO2浓度数据。`type` 固定为 `"co2_data"`，CO2 浓度字段为顶层 `ppm`。
 
-**格式一（嵌套 data）：**
+> ⚠️ 历史文档曾描述 `type: environment` / `co2` + `co2_ppm` 字段，但上位机实际只识别 `co2_data` + `ppm`（见 `ROS1TcpClient.cpp` CO2 解析）。本节已按代码实现更正。
+
 ```json
 {
-  "type": "environment",
-  "data": {
-    "co2_ppm": 420.5,
-    "timestamp": 1709971200
-  }
-}
-```
-
-**格式二（扁平）：**
-```json
-{
-  "type": "co2",
-  "co2_ppm": 420.5,
-  "timestamp": 1709971200
+  "type": "co2_data",
+  "ppm": 420.5
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| co2_ppm | float | CO2浓度（ppm） |
-| timestamp | int | 秒级时间戳 |
+| ppm | float | CO2浓度（ppm） |
 
 **UI显示阈值：**
 | 浓度范围 | 颜色 | 状态 |
